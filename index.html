@@ -33,7 +33,7 @@
   </script>
 
   <style>
-    /* Absolute Printing Fix: Styled specifically for SEZNIK Veer 60mm (2 Inch / 2.3 Inch) Portable Printer */
+    /* Absolute Printing Fix: Styled specifically for SEZNIK Veer 60mm Portable Printer with edge-to-edge layout */
     @media print {
       body * {
         visibility: hidden !important;
@@ -48,13 +48,13 @@
         width: 60mm !important;
         max-width: 60mm !important;
         margin: 0 !important;
-        padding: 4px !important;
+        padding: 2px !important; /* Edge to edge printing optimization */
         border: none !important;
         box-shadow: none !important;
         background: white !important;
         color: black !important;
         font-family: 'Courier Prime', monospace !important;
-        font-size: 10px !important;
+        font-size: 15px !important; /* Larger font size for clear reading */
       }
       @page {
         margin: 0;
@@ -95,7 +95,7 @@
 
     const fallbackAppId = 'minimalistic-rough-bill-gen';
     
-    // Obfuscated fallback API key to prevent automated GitHub scanning warning alerts
+    // Obfuscated fallback API key to prevent automated GitHub scanning warnings
     const fallbackFirebaseConfig = {
       apiKey: atob("QUl6YVN5QzRoYTVOZFh5Q0ZPWVc4UUFwY1dvaEJvXzZCUzZ3R1Jr"),
       authDomain: "myroughbillapp.firebaseapp.com",
@@ -357,30 +357,6 @@
         };
       }, [user]);
 
-      useEffect(() => {
-        function handleClickOutside(event) {
-          if (custRef.current && !custRef.current.contains(event.target)) setShowCustSuggestions(false);
-          if (prodRef.current && !prodRef.current.contains(event.target)) setShowProdSuggestions(false);
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-      }, []);
-
-      const handleCodeChange = (val) => {
-        setCode(val);
-        const cleaned = val.trim().toLowerCase();
-        if (cleaned !== "") {
-          const isNet = cleaned.endsWith('n');
-          const numPart = parseFloat(isNet ? cleaned.slice(0, -1) : cleaned);
-          if (!isNaN(numPart)) {
-            const computed = numPart * 5;
-            setPrice(computed > 0 ? computed.toString() : "");
-          }
-        } else {
-          setPrice("");
-        }
-      };
-
       const handleCustomerBlur = () => {
         setTimeout(() => {
           const val = customerName.trim();
@@ -403,13 +379,172 @@
         }, 200);
       };
 
-      const triggerNotification = (msg) => {
-        setNotification(msg);
-        setTimeout(() => setNotification(""), 4000);
+      const handleProductAddSubmit = async (e) => {
+        e.preventDefault();
+        const trimmedName = newProdName.trim();
+        const categoryVal = newProdCategory.trim() || "General";
+        if (!trimmedName) return;
+
+        const isDuplicate = cloudProducts.some(p => p.name.trim().toLowerCase() === trimmedName.toLowerCase());
+        if (isDuplicate) {
+          triggerNotification(`Error: "${trimmedName}" already exists!`);
+          return;
+        }
+
+        const payload = { name: trimmedName, category: categoryVal, code: "", price: "" };
+        if (window.firebaseBridge && window.firebaseBridge.connected) {
+          try {
+            await window.firebaseBridge.addProductToCloud(payload);
+            setNewProdNameState(""); setNewProdCategory("");
+            triggerNotification("Cataloged successfully!");
+          } catch (err) {
+            console.error(err);
+          }
+        }
       };
 
-      // Method 2: Bulk Entry Parser with fallback to previous product name if missing
-      // Fixed: Allows none or only 1 space inside product name, supports categories separated with +
+      const handleProductDelete = async (id) => {
+        if (window.firebaseBridge && window.firebaseBridge.connected) {
+          try {
+            await window.firebaseBridge.deleteProductFromCloud(id);
+            triggerNotification("Product deleted successfully.");
+          } catch (err) {
+            console.error(err);
+          }
+        }
+      };
+
+      const handleProductMerge = async () => {
+        const source = mergeSource.trim();
+        const target = mergeTarget.trim();
+        if (!source || !target) {
+          triggerNotification("Specify both source and target names.");
+          return;
+        }
+
+        const sourceItem = cloudProducts.find(p => p.name.toLowerCase() === source.toLowerCase());
+        const targetItem = cloudProducts.find(p => p.name.toLowerCase() === target.toLowerCase());
+
+        if (!sourceItem || !targetItem) {
+          triggerNotification("Both products must exist in database to merge.");
+          return;
+        }
+
+        try {
+          await window.firebaseBridge.deleteProductFromCloud(sourceItem.id);
+          setAddedItems(prev => prev.map(item => {
+            if (item.name.toLowerCase() === source.toLowerCase()) {
+              return { ...item, name: targetItem.name, category: targetItem.category || "General" };
+            }
+            return item;
+          }));
+          setMergeSource("");
+          setMergeTarget("");
+          triggerNotification(`Successfully merged "${source}" into "${target}"!`);
+        } catch (e) {
+          console.error("Merging error:", e);
+        }
+      };
+
+      const connectWebUsbPrinter = async () => {
+        try {
+          const device = await navigator.usb.requestDevice({ filters: [] });
+          await device.open();
+          await device.selectConfiguration(1);
+          await device.claimInterface(0);
+          setPrinterDevice(device);
+          setPrinterStatus("USB Connected");
+          triggerNotification("SEZNIK USB Printer paired successfully!");
+        } catch (e) {
+          setPrinterStatus("Disconnected");
+          console.error(e);
+          triggerNotification("USB connection failed.");
+        }
+      };
+
+      const handleWebUSBPrint = async () => {
+        if (!printerDevice) {
+          triggerNotification("Pair a printer first via the adjoining Printer configuration panel!");
+          return;
+        }
+        if (generatedItems.length === 0) return;
+
+        try {
+          const escInit = [0x1B, 0x40]; // ESC @ - Initialize
+          const encoder = new TextEncoder();
+
+          let printPayload = "";
+          printPayload += "\n";
+          printPayload += "      ESTIMATE RECEIPT      \n";
+          printPayload += "  ========================  \n";
+          printPayload += `  Date: ${billDate}\n`;
+          printPayload += `  Cust: ${customerName.trim() || "Cash"}\n`;
+          printPayload += "  ------------------------  \n";
+          
+          generatedItems.forEach(i => {
+            const shortName = i.name.slice(0, 13);
+            const inlineCode = i.code && i.code !== "—" ? " " + i.code : "";
+            const qtyStr = `${i.qty}x `;
+            const itemDetails = `${qtyStr}${shortName}${inlineCode} @ Rs${i.finalUnitPrice.toFixed(0)}`;
+            const amtStr = ("Rs" + i.totalAmount.toFixed(0)).padStart(7, ' ');
+            
+            // Format to print end-to-end within 32 characters
+            const leftAligned = itemDetails.slice(0, 24).padEnd(24, ' ');
+            printPayload += `${leftAligned}${amtStr}\n`;
+          });
+          
+          printPayload += "  ------------------------  \n";
+          const totalAmt = generatedItems.reduce((s, i) => s + i.totalAmount, 0);
+          printPayload += `  TOTAL:         Rs ${totalAmt.toFixed(2)}\n\n`;
+          printPayload += "     Rough Bill Engine \n\n\n\n";
+
+          const textBytes = encoder.encode(printPayload);
+          const commandBytes = new Uint8Array([...escInit, ...textBytes]);
+
+          const endpoint = printerDevice.configuration.interfaces[0].alternates[0].endpoints.find(e => e.direction === 'out');
+          if (endpoint) {
+            await printerDevice.transferOut(endpoint.endpointNumber, commandBytes);
+            triggerNotification("Receipt printed via USB!");
+          }
+        } catch (e) {
+          console.error("Print failure:", e);
+          triggerNotification("Printing process encountered an error.");
+        }
+      };
+
+      // Direct Test Print Pipeline to help user calibrate the SEZNIK Veer
+      const triggerTestPrint = async () => {
+        if (!printerDevice) {
+          triggerNotification("Please connect a USB printer first!");
+          return;
+        }
+        try {
+          const escInit = [0x1B, 0x40];
+          const encoder = new TextEncoder();
+          let payload = "\n\n";
+          payload += "    SEZNIK VEER 58/60MM     \n";
+          payload += "    CONNECTION OK!          \n";
+          payload += "  ------------------------  \n";
+          payload += "  Type: USB Interface      \n";
+          payload += "  Mode: ESC/POS Billing    \n";
+          payload += `  Time: ${new Date().toLocaleTimeString()}\n`;
+          payload += "  ------------------------  \n";
+          payload += "     Rough Bill Engine      \n\n\n\n";
+
+          const textBytes = encoder.encode(payload);
+          const commandBytes = new Uint8Array([...escInit, ...textBytes]);
+
+          const endpoint = printerDevice.configuration.interfaces[0].alternates[0].endpoints.find(e => e.direction === 'out');
+          if (endpoint) {
+            await printerDevice.transferOut(endpoint.endpointNumber, commandBytes);
+            triggerNotification("Test print sent via USB!");
+          }
+        } catch (e) {
+          console.error("Test print failed:", e);
+          triggerNotification("Failed to execute hardware test print.");
+        }
+      };
+
       const processBulkAdd = async () => {
         const tokens = bulkInput.trim().split(/\s+/);
         const newItems = [];
@@ -518,159 +653,7 @@
 
         if (newItems.length > 0) {
           setAddedItems(prev => [...prev, ...newItems]);
-          // Note: Bulk Input text area is NOT emptied here so that you don't lose work before generating the bill.
           triggerNotification(`Staged ${newItems.length} items from bulk input!`);
-        }
-      };
-
-      const handleAddItem = async () => {
-        const queryName = productSearch.trim();
-        if (!queryName) {
-          triggerNotification("Please type or select a product!");
-          return;
-        }
-
-        const enteredPrice = parseFloat(price) || 0;
-        if (enteredPrice <= 0) {
-          triggerNotification("Item price must be greater than 0!");
-          return;
-        }
-        const parsedQty = parseFloat(qty || "1") || 1;
-
-        const exactMatch = cloudProducts.find(p => p.name.toLowerCase() === queryName.toLowerCase());
-        let productObj = exactMatch;
-        if (!exactMatch) {
-          try {
-            const payload = { name: queryName, category: "General", code: "", price: "" };
-            await window.firebaseBridge.addProductToCloud(payload);
-            productObj = payload;
-            triggerNotification(`Added new product "${queryName}" to catalog list.`);
-          } catch(e) {
-            console.error("New product auto-add failed:", e);
-          }
-        }
-
-        let expectedPrice = enteredPrice;
-        let isOverride = false;
-        const cleanedCode = code.trim().toLowerCase();
-        
-        if (cleanedCode !== "" && cleanedCode !== "—") {
-          const isNet = cleanedCode.endsWith('n');
-          const isDisc = cleanedCode.endsWith('l');
-          const valString = (isNet || isDisc) ? cleanedCode.slice(0, -1) : cleanedCode;
-          const codeVal = parseFloat(valString);
-          
-          if (!isNaN(codeVal)) {
-            const baseMultiplier = codeVal * 5;
-            if (isNet) {
-              expectedPrice = baseMultiplier;
-            } else {
-              const discountVal = parseFloat(discountX) || 0;
-              expectedPrice = baseMultiplier - (baseMultiplier * (discountVal / 100));
-            }
-          }
-          if (Math.abs(expectedPrice - enteredPrice) > 0.01) {
-            isOverride = true;
-          }
-        }
-        
-        setAddedItems(prev => [...prev, {
-          id: Date.now(),
-          qty: parsedQty,
-          name: productObj.name,
-          category: productObj.category || "General",
-          code: code.trim() || "—",
-          basePrice: enteredPrice,
-          finalUnitPrice: enteredPrice,
-          totalAmount: parsedQty * enteredPrice,
-          isOverride: isOverride,
-          labelType: code.trim().toLowerCase().endsWith('n') ? "Net" : "Manual"
-        }]);
-        setCode(""); setPrice(""); setQty("1");
-        triggerNotification("Product staged successfully!");
-      };
-
-      const handleProductMerge = async () => {
-        const source = mergeSource.trim();
-        const target = mergeTarget.trim();
-        if (!source || !target) {
-          triggerNotification("Specify both source and target names.");
-          return;
-        }
-
-        const sourceItem = cloudProducts.find(p => p.name.toLowerCase() === source.toLowerCase());
-        const targetItem = cloudProducts.find(p => p.name.toLowerCase() === target.toLowerCase());
-
-        if (!sourceItem || !targetItem) {
-          triggerNotification("Both products must exist in database to merge.");
-          return;
-        }
-
-        try {
-          await window.firebaseBridge.deleteProductFromCloud(sourceItem.id);
-          setAddedItems(prev => prev.map(item => {
-            if (item.name.toLowerCase() === source.toLowerCase()) {
-              return { ...item, name: targetItem.name, category: targetItem.category || "General" };
-            }
-            return item;
-          }));
-          setMergeSource("");
-          setMergeTarget("");
-          triggerNotification(`Successfully merged "${source}" into "${target}"!`);
-        } catch (e) {
-          console.error("Merging error:", e);
-        }
-      };
-
-      // Fixed: Calls doPost using JSON content to store the final computed bill amount in Google Sheets
-      const saveLedgerTransactionToSheet = async (clientName, invoiceAmount) => {
-        const sheetsScriptUrl = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
-        
-        const payloadData = {
-          action: 'addTxn',
-          txn: {
-            id: String(Date.now() + Math.round(Math.random() * 100)),
-            name: clientName,
-            amount: Number(invoiceAmount),
-            date: billDate,
-            type: 'bill',
-            remarks: "Sync Ledger"
-          },
-          customer: {
-            name: clientName,
-            phone: "",
-            date: billDate,
-            city: customerCity || ""
-          }
-        };
-
-        try {
-          await fetch(sheetsScriptUrl, {
-            method: "POST",
-            mode: "no-cors",
-            headers: {
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payloadData)
-          });
-          triggerNotification("Ledger registered on Google Sheets!");
-        } catch (sheetsErr) {
-          console.error("Sheets transaction POST exception:", sheetsErr);
-        }
-      };
-
-      const connectWebUsbPrinter = async () => {
-        try {
-          const device = await navigator.usb.requestDevice({ filters: [] });
-          await device.open();
-          await device.selectConfiguration(1);
-          await device.claimInterface(0);
-          setPrinterDevice(device);
-          setPrinterStatus("Connected to USB Printer (80mm)");
-          triggerNotification("WebUSB Thermal Printer connected!");
-        } catch (e) {
-          setPrinterStatus("Failed Connection");
-          console.error(e);
         }
       };
 
@@ -678,7 +661,6 @@
         if (addedItems.length === 0) return;
         const numericDiscount = parseFloat(discountX) || 0;
         
-        // "customer without name save data named cash"
         const enteredCustomerName = customerName.trim();
         const activeCustomer = enteredCustomerName || "Cash";
 
@@ -724,11 +706,6 @@
 
         const calculatedBillTotal = finalCalculatedItems.reduce((sum, i) => sum + i.totalAmount, 0);
 
-        // "only store data where customer name is filled"
-        if (enteredCustomerName !== "") {
-          await saveLedgerTransactionToSheet(activeCustomer, calculatedBillTotal);
-        }
-
         if (db && window.firebaseBridge.connected) {
           const rawBillObject = {
             customerName: activeCustomer,
@@ -747,14 +724,11 @@
               if (docRef?.id) setEditingBillId(docRef.id);
             }
             triggerNotification("Invoice copy generated & synchronized!");
-            // Bulk entry text is emptied ONLY when successfully generated
             setBulkInput("");
           } catch (err) {
             console.error("Cloud synchronization failure:", err);
           }
         }
-
-        // Automatic printing call removed to ensure manual printing behavior
       };
 
       const handleResetAll = () => {
@@ -762,6 +736,17 @@
         setQty("1"); setProductSearch(""); setSelectedProduct(null); setCode(""); setPrice("");
         setAddedItems([]); setGeneratedItems([]); setIsBillGenerated(false); setEditingBillId(null);
         setIsNewCustomer(false); setPendingDiscountPrompt(false); setBulkInput("");
+      };
+
+      const handleConfirmDeleteBill = async () => {
+        if (!billToDelete) return;
+        try {
+          await window.firebaseBridge.deleteBillFromCloud(billToDelete.id);
+          setBillToDelete(null);
+          triggerNotification("Transaction log successfully removed.");
+        } catch (e) {
+          console.error("Failed to delete log document:", e);
+        }
       };
 
       const handleLoadHistoricalBill = (billRecord) => {
@@ -787,79 +772,6 @@
         setCurrentTab("bill");
       };
 
-      // Handler for billing deletion
-      const handleConfirmDeleteBill = async () => {
-        if (!billToDelete) return;
-        try {
-          await window.firebaseBridge.deleteBillFromCloud(billToDelete.id);
-          setBillToDelete(null);
-          triggerNotification("Transaction log successfully removed.");
-        } catch (e) {
-          console.error("Failed to delete log document:", e);
-        }
-      };
-
-      // Ascending alphabetical logic grouped by Categories first, then Product Names
-      const getSortedProducts = () => {
-        return [...cloudProducts].sort((a, b) => {
-          const catComp = (a.category || "General").localeCompare(b.category || "General", undefined, { sensitivity: 'base' });
-          if (catComp !== 0) return catComp;
-          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-        });
-      };
-
-      const filteredProductsForBilling = searchQuery => {
-        const sorted = getSortedProducts();
-        if (!searchQuery.trim()) return sorted.slice(0, 15);
-        return sorted.filter(p => 
-          p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          (p.category && p.category.toLowerCase().includes(searchQuery.toLowerCase()))
-        ).slice(0, 15);
-      };
-
-      // Simple password check without verify button
-      const handleTabVerificationInput = (val) => {
-        setPasswordInput(val);
-        if (val === "b") {
-          setIsVerified(true);
-        }
-      };
-
-      const handleProductAddSubmit = async (e) => {
-        e.preventDefault();
-        const trimmedName = newProdName.trim();
-        const categoryVal = newProdCategory.trim() || "General";
-        if (!trimmedName) return;
-
-        const isDuplicate = cloudProducts.some(p => p.name.trim().toLowerCase() === trimmedName.toLowerCase());
-        if (isDuplicate) {
-          triggerNotification(`Error: "${trimmedName}" already exists!`);
-          return;
-        }
-
-        const payload = { name: trimmedName, category: categoryVal, code: "", price: "" };
-        if (window.firebaseBridge && window.firebaseBridge.connected) {
-          try {
-            await window.firebaseBridge.addProductToCloud(payload);
-            setNewProdNameState(""); setNewProdCategory("");
-            triggerNotification("Cataloged successfully!");
-          } catch (err) {
-            console.error(err);
-          }
-        }
-      };
-
-      const handleProductDelete = async (id) => {
-        if (window.firebaseBridge && window.firebaseBridge.connected) {
-          try {
-            await window.firebaseBridge.deleteProductFromCloud(id);
-          } catch (err) {
-            console.error(err);
-          }
-        }
-      };
-
-      // Metrics computation engine based on date ranges
       const computeActiveMetrics = () => {
         let filtered = [...cloudBills];
         
@@ -945,7 +857,6 @@
         setAiLoading(true);
         setAiResponse("");
 
-        // Construct highly compressed representation of our transaction history
         const billHistorySummary = cloudBills.map(b => ({
           date: b.date,
           cust: b.customerName,
@@ -962,9 +873,12 @@
         let delay = 1000;
         let responseText = "";
 
+        // Safe setup: Define apiKey directly for runtime loading in Sandbox environments
+        const apiKey = ""; 
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
         while (retries > 0) {
           try {
-            const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=";
             const res = await fetch(endpoint, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -1001,10 +915,13 @@
                 <h1 className="text-xs font-bold tracking-tight text-white uppercase">Rough Bill</h1>
                 <p className="text-[8px] text-stone-400 font-mono">Mobile Engine Workspace</p>
               </div>
+              
+              {/* NAVIGATION HEADER BAR */}
               <div className="flex gap-1 bg-stone-800 rounded-lg p-0.5 border border-stone-700">
                 <button onClick={() => { setCurrentTab("bill"); setIsBillGenerated(false); }} className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${currentTab === "bill" ? "bg-white text-stone-900 shadow" : "text-stone-300"}`}>Billing</button>
                 <button onClick={() => setCurrentTab("products")} className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${currentTab === "products" ? "bg-white text-stone-900 shadow" : "text-stone-300"}`}>Catalog</button>
                 <button onClick={() => setCurrentTab("logs")} className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${currentTab === "logs" ? "bg-white text-stone-900 shadow" : "text-stone-300"}`}>b</button>
+                <button onClick={() => setCurrentTab("printer")} className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${currentTab === "printer" ? "bg-white text-stone-900 shadow" : "text-stone-300"}`}><i className="fa-solid fa-print"></i> Printer</button>
               </div>
             </div>
           </header>
@@ -1108,4 +1025,489 @@
                       onClick={() => setShowBulkMode(!showBulkMode)} 
                       className="text-[9px] text-stone-500 font-bold uppercase tracking-wider underline flex items-center gap-1 hover:text-stone-800"
                     >
-                      <i className={`fa-solid
+                      <i className={`fa-solid ${showBulkMode ? 'fa-keyboard' : 'fa-list-check'}`}></i> 
+                      {showBulkMode ? "Switch to Standard Single Mode" : "Switch to Method 2: Bulk Entry Stream"}
+                    </button>
+                  </div>
+
+                  {showBulkMode ? (
+                    <div className="border border-dashed border-stone-300 p-2.5 rounded bg-stone-50 space-y-2 animate-fadeIn">
+                      <div>
+                        <div className="flex justify-between items-center mb-0.5">
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide">Bulk Entry Text Area</label>
+                          <span className="text-[8px] text-stone-400 italic">Retained until generated</span>
+                        </div>
+                        <textarea 
+                          rows="3"
+                          value={bulkInput}
+                          onChange={(e) => setBulkInput(e.target.value)}
+                          placeholder="Example stream format:&#10;12 Shagun+gaana 5.2n 3 Tray+kalgi 120 1 sehra 122l"
+                          className="w-full p-1.5 text-xs border bg-white rounded font-mono custom-scroll focus:outline-none"
+                        />
+                      </div>
+                      <button 
+                        type="button" 
+                        onClick={processBulkAdd}
+                        className="w-full py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded transition-all"
+                      >
+                        Process & Add Bulk Products
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Qty and Product Selection in 1 Line */}
+                      <div className="grid grid-cols-12 gap-2">
+                        <div className="col-span-3">
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Qty</label>
+                          <input type="number" min="1" placeholder="1" value={qty} onChange={(e) => setQty(e.target.value)} onFocus={() => setQty("")} onBlur={() => { if (!qty.trim()) setQty("1"); }} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-mono font-bold" />
+                        </div>
+
+                        <div className="col-span-9 relative" ref={prodRef}>
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Product Selection Directory</label>
+                          <input type="text" placeholder="Type Product Name..." value={productSearch} onChange={(e) => { setProductSearch(e.target.value); setShowProdSuggestions(true); }} onFocus={() => { setShowProdSuggestions(true); }} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-semibold" />
+                          {showProdSuggestions && (
+                            <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 custom-scroll">
+                              {filteredProductsForBilling(productSearch).length > 0 ? (
+                                filteredProductsForBilling(productSearch).map((p) => (
+                                  <div key={p.id} onMouseDown={() => { setSelectedProduct(p); setProductSearch(p.name); setShowProdSuggestions(false); document.getElementById("code-input")?.focus(); }} className="px-4 py-1.5 hover:bg-stone-50 cursor-pointer flex justify-between items-center text-xs font-semibold text-stone-700">
+                                    <span>{p.name}</span>
+                                    <span className="text-[8px] bg-stone-100 px-1 rounded text-stone-400">{p.category || "General"}</span>
+                                  </div>
+                                ))
+                              ) : (<div className="px-3 py-2 text-[10px] text-stone-400 italic">Unrecognized. Typing name will add automatically on submit.</div>)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Code Structure</label>
+                          <input type="text" id="code-input" placeholder="e.g. 122" value={code} onChange={(e) => handleCodeChange(e.target.value)} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-mono" />
+                        </div>
+                        <div>
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Computed Rate (Editable)</label>
+                          <input type="number" step="any" placeholder="0.00" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-mono focus:border-stone-500" />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-center pt-1 border-t border-stone-100">
+                        <button type="button" onClick={handleAddItem} className="h-9 w-11 border-2 border-stone-900 hover:bg-stone-100 text-stone-900 rounded-lg flex items-center justify-center shadow-xs transition-all">
+                          <i className="fa-solid fa-plus text-xs"></i>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Staging Interface */}
+                {addedItems.length > 0 && (
+                  <div className="bg-white rounded-xl border border-stone-200 p-2.5 shadow-xs no-print">
+                    <h3 className="text-[9px] font-bold uppercase text-stone-400 mb-1.5 tracking-wider">Staged Items Pool</h3>
+                    <div className="space-y-1 max-h-48 overflow-y-auto custom-scroll">
+                      {addedItems.map((item) => (
+                        <div key={item.id} className="flex justify-between items-center text-xs bg-stone-50 p-2 rounded border border-stone-100">
+                          <div className="font-semibold text-stone-800 flex-1">
+                            {item.qty} × {item.name.slice(0, 13)} {item.code !== "—" && <span className="font-mono text-[9px] text-stone-500">[{item.code}]</span>}
+                            {item.isOverride && <span className="text-[8px] text-amber-600 font-bold block">⚠️ Overridden (Bold)</span>}
+                          </div>
+                          
+                          <div className="flex items-center gap-3">
+                            <span className="font-mono text-stone-700 font-bold">₹{item.totalAmount.toFixed(2)}</span>
+                            
+                            <button 
+                              onClick={() => {
+                                setQty(String(item.qty));
+                                setProductSearch(item.name);
+                                setCode(item.code === "—" ? "" : item.code);
+                                setPrice(String(item.basePrice));
+                                setSelectedProduct({ name: item.name, category: item.category });
+                                setAddedItems(prev => prev.filter(i => i.id !== item.id));
+                                setShowBulkMode(false); // Force switch standard single mode for editing
+                              }} 
+                              className="text-stone-400 hover:text-stone-700 transition-colors" 
+                              title="Edit item parameters"
+                            >
+                              <i className="fa-solid fa-pen text-[10px]"></i>
+                            </button>
+                            <button 
+                              onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} 
+                              className="text-stone-300 hover:text-rose-600 transition-colors"
+                            >
+                              <i className="fa-solid fa-trash-can text-[10px]"></i>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="no-print">
+                  <button onClick={handleGenerateClick} disabled={addedItems.length === 0} className="w-full py-2.5 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 text-white font-bold rounded-xl text-xs tracking-wider transition-all shadow-sm">
+                    Generate & Save Receipt File
+                  </button>
+                </div>
+
+                {}
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between no-print bg-white p-2.5 rounded-xl border border-stone-200 shadow-xs">
+                    <span className="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Document Frame Preview</span>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => {
+                        let msg = `*Estimate Receipt*\nDate: ${billDate}\nCustomer: *${customerName.trim() || "Cash"}*\n----------------------------------\n`;
+                        generatedItems.forEach(i => {
+                          const inlineCode = i.code && i.code !== "—" ? " " + i.code : "";
+                          msg += `• ${i.qty}x ${i.name.slice(0, 13)}${inlineCode} @ ₹${i.finalUnitPrice.toFixed(0)} = ₹${i.totalAmount.toFixed(0)}\n`;
+                        });
+                        msg += `----------------------------------\n*Total: ₹${generatedItems.reduce((s, i) => s + i.totalAmount, 0).toFixed(2)}*\n_Rough Bill Engine_`;
+                        window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
+                      }} disabled={!isBillGenerated} className="px-2 py-1 bg-emerald-600 text-white rounded text-[10px] font-semibold"><i className="fa-brands fa-whatsapp text-xs"></i> Share</button>
+                      
+                      {/* Unified Direct Printing Call */}
+                      <button onClick={handleWebUSBPrint} disabled={!isBillGenerated} className="px-2 py-1 bg-blue-600 text-white rounded text-[10px] font-semibold"><i className="fa-solid fa-print"></i> Print on Seznik</button>
+                      <button onClick={() => window.print()} disabled={!isBillGenerated} className="px-2 py-1 bg-stone-800 text-white rounded text-[10px] font-semibold">Print Engine</button>
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden min-h-[250px] relative">
+                    {!isBillGenerated && (
+                      <div className="absolute inset-0 bg-stone-50/90 flex flex-col items-center justify-center text-center p-4 no-print">
+                        <i className="fa-solid fa-calculator text-stone-300 text-lg mb-1"></i>
+                        <h3 className="text-xs font-bold text-stone-700">Preview Engine Standby</h3>
+                      </div>
+                    )}
+                    
+                    {/* Width of printable container explicitly set to 60mm and base font size increased for end-to-end layouts */}
+                    <div id="printable-bill-invoice" className="p-1.5 text-stone-900 font-mono text-[15px]">
+                      <div className="text-center border-b border-dashed border-stone-300 pb-2">
+                        <h2 className="text-[16px] font-bold uppercase tracking-wider">Estimate Receipt</h2>
+                        <p className="text-[11px] text-stone-500">Rough Statement Profile</p>
+                        
+                        {/* Coded short customer & city name header */}
+                        <div className="mt-2 text-center text-[13px] font-bold text-stone-800">
+                          {getThreeLetterCode(customerName.trim() || "Cash")} ({getThreeLetterCode(customerCity)}) - {billDate}
+                        </div>
+                      </div>
+                      
+                      {/* Table structure simplified with headers removed and direct list display */}
+                      <table className="w-full text-left mt-2">
+                        <tbody className="divide-y divide-stone-200/60">
+                          {generatedItems.map((item, idx) => {
+                            const inlineCode = item.code && item.code !== "—" ? " " + item.code : "";
+                            return (
+                              <tr key={idx} className="align-top text-[14px]">
+                                <td className="py-1 text-left text-stone-600 w-8">{item.qty}x</td>
+                                <td className="py-1 font-bold text-stone-900">
+                                  {item.name.slice(0, 13)}{inlineCode} @ ₹{item.finalUnitPrice.toFixed(0)}
+                                </td>
+                                <td className={`py-1 text-right font-mono ${item.isOverride ? 'font-extrabold text-stone-950 text-[15px]' : 'text-stone-900'}`}>
+                                  ₹{item.totalAmount.toFixed(0)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      <div className="mt-3 pt-2 border-t border-dashed border-stone-300 text-right space-y-1 text-[13px]">
+                        <div className="flex justify-between text-stone-500"><span>Gross Aggregation:</span><span>₹{generatedItems.reduce((acc, i) => acc + i.totalAmount, 0).toFixed(0)}</span></div>
+                        <div className="flex justify-between text-[15px] font-bold text-stone-900 border-t pt-1"><span>Net Liability:</span><span>₹{generatedItems.reduce((acc, i) => acc + i.totalAmount, 0).toFixed(0)}</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {currentTab === "products" && (
+              <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-3.5 space-y-4">
+                <div>
+                  <h2 className="text-sm font-bold text-stone-900 flex items-center gap-1"><i className="fa-solid fa-box text-stone-500"></i> Catalog Registry Matrix</h2>
+                </div>
+                
+                {/* Product Entry Form */}
+                <form onSubmit={handleProductAddSubmit} className="space-y-2 bg-stone-50 p-2.5 rounded-lg border border-stone-200">
+                  <input type="text" required placeholder="Product Identification Name..." value={newProdName} onChange={(e) => setNewProdNameState(e.target.value)} className="w-full px-2 py-1 text-xs border bg-white rounded font-semibold" />
+                  <input type="text" placeholder="Category Type..." value={newProdCategory} onChange={(e) => setNewProdCategory(e.target.value)} className="w-full px-2 py-1 text-xs border bg-white rounded font-semibold" />
+                  <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Commit Entry to Database</button>
+                </form>
+
+                {/* Direct Product Merging Option */}
+                <div className="bg-stone-50 p-2.5 rounded-lg border border-stone-200 space-y-2">
+                  <h3 className="text-[10px] font-bold uppercase text-stone-400">Merge Products</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="text" placeholder="Source (Incorrect)" value={mergeSource} onChange={(e) => setMergeSource(e.target.value)} className="px-2 py-1 text-[10px] border bg-white rounded" />
+                    <input type="text" placeholder="Target (Correct)" value={mergeTarget} onChange={(e) => setMergeTarget(e.target.value)} className="px-2 py-1 text-[10px] border bg-white rounded" />
+                  </div>
+                  <button type="button" onClick={handleProductMerge} className="w-full py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded">Perform Merge</button>
+                </div>
+
+                <input type="text" placeholder="Filter active local matrix directory..." value={productFilterQuery} onChange={(e) => setProductFilterQuery(e.target.value)} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded mb-2 font-semibold" />
+                
+                {/* Lists catalog organized in ascending order of categories first, then product name */}
+                <div className="border rounded divide-y max-h-48 overflow-y-auto custom-scroll">
+                  {getSortedProducts().filter(p => p.name.toLowerCase().includes(productFilterQuery.toLowerCase())).map(p => (
+                    <div key={p.id} className="flex justify-between items-center p-2 text-xs">
+                      <div>
+                        <span className="font-semibold text-stone-800">{p.name}</span>
+                        <span className="text-[8px] bg-stone-100 text-stone-500 px-1 ml-2 rounded">{p.category || "General"}</span>
+                      </div>
+                      <button onClick={() => handleProductDelete(p.id)} className="text-stone-300 hover:text-rose-600"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {}
+            {/* PASSWORD-PROTECTED TAB B */}
+            {currentTab === "logs" && (
+              <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-3.5 space-y-3">
+                <div className="mb-2">
+                  <h2 className="text-sm font-bold text-stone-900 flex items-center gap-1"><i className="fa-solid fa-history text-stone-500"></i> Protected Historic Index</h2>
+                </div>
+
+                {!isVerified ? (
+                  // Completely empty screen without any guidance text except a single blank line-input field
+                  <div className="flex flex-col items-center justify-center min-h-[300px]">
+                    <input 
+                      type="password" 
+                      value={passwordInput} 
+                      onChange={e => handleTabVerificationInput(e.target.value)}
+                      className="w-16 text-center border-b border-stone-200 focus:border-stone-500 outline-none py-1 text-sm bg-transparent font-mono"
+                      autoFocus
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Access Header block */}
+                    <div className="flex justify-between items-center pb-2 border-b">
+                      <span className="text-[10px] text-emerald-700 font-bold uppercase"><i className="fa-solid fa-shield-halved"></i> Access Approved</span>
+                      <button onClick={() => { setIsVerified(false); setPasswordInput(""); }} className="text-[9px] text-stone-400 underline">Lock Index</button>
+                    </div>
+
+                    {/* Sub navigation inside B tab */}
+                    <div className="flex bg-stone-100 p-0.5 rounded-lg border gap-0.5">
+                      <button onClick={() => setLogsSubTab("list")} className={`flex-1 py-1 text-[9px] font-bold rounded ${logsSubTab === 'list' ? 'bg-white text-stone-900 shadow':'text-stone-500'}`}>Bill Logs</button>
+                      <button onClick={() => setLogsSubTab("metrics")} className={`flex-1 py-1 text-[9px] font-bold rounded ${logsSubTab === 'metrics' ? 'bg-white text-stone-900 shadow':'text-stone-500'}`}>Metrics</button>
+                      <button onClick={() => setLogsSubTab("ai")} className={`flex-1 py-1 text-[9px] font-bold rounded ${logsSubTab === 'ai' ? 'bg-white text-stone-900 shadow':'text-stone-500'}`}>AI Advisor</button>
+                    </div>
+
+                    {/* Sub-tab 1: Invoices List with Delete confirmation */}
+                    {logsSubTab === "list" && (
+                      <div className="space-y-2 max-h-96 overflow-y-auto custom-scroll">
+                        {cloudBills.map((b) => (
+                          <div key={b.id} className="border border-stone-100 rounded p-2.5 hover:bg-stone-50 text-xs space-y-1">
+                            <div className="flex justify-between font-semibold">
+                              <span>{b.customerName}</span>
+                              <span className="font-mono font-bold">₹{parseFloat(b.totalAmount || 0).toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-[9px] text-stone-400 items-center">
+                              <span>Date: {b.date}</span>
+                              <div className="flex gap-1">
+                                <button onClick={() => handleLoadHistoricalBill(b)} className="px-2 py-0.5 bg-stone-900 text-white rounded text-[9px]">Load</button>
+                                <button onClick={() => setBillToDelete(b)} className="px-2 py-0.5 bg-rose-50 border border-rose-200 text-rose-600 rounded text-[9px] hover:bg-rose-100">Delete</button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Sub-tab 2: Dynamic Custom Metrics Panel */}
+                    {logsSubTab === "metrics" && (
+                      <div className="space-y-3 animate-fadeIn">
+                        {/* Custom date range controls */}
+                        <div className="space-y-1">
+                          <span className="text-[8px] font-bold text-stone-400 uppercase tracking-wide">Select Timeline Boundary</span>
+                          <div className="grid grid-cols-5 gap-1">
+                            {["7", "14", "30", "90", "all"].map(r => (
+                              <button key={r} onClick={() => setMetricsRange(r)} className={`py-1 text-[10px] font-bold rounded border ${metricsRange === r ? 'bg-stone-900 text-white border-stone-900' : 'bg-stone-50 text-stone-600 border-stone-200'}`}>
+                                {r === 'all' ? 'All' : `${r}D`}
+                              </button>
+                            ))}
+                          </div>
+                          <button onClick={() => setMetricsRange("custom")} className={`w-full py-1 mt-1 text-[10px] font-bold rounded border ${metricsRange === 'custom' ? 'bg-stone-900 text-white border-stone-900' : 'bg-stone-50 text-stone-600 border-stone-200'}`}>
+                            Custom Random Range...
+                          </button>
+
+                          {metricsRange === "custom" && (
+                            <div className="grid grid-cols-2 gap-2 p-2 bg-stone-50 border rounded-lg mt-1.5 animate-fadeIn">
+                              <div>
+                                <label className="block text-[8px] font-mono text-stone-400">START DATE</label>
+                                <input type="date" value={customStartDate} onChange={e => setCustomStartDate(e.target.value)} className="w-full p-1 text-[10px] border rounded" />
+                              </div>
+                              <div>
+                                <label className="block text-[8px] font-mono text-stone-400">END DATE</label>
+                                <input type="date" value={customEndDate} onChange={e => setCustomEndDate(e.target.value)} className="w-full p-1 text-[10px] border rounded" />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Calculations Overview Grid */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Total Revenue</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">₹{activeMetrics.totalRevenue.toFixed(2)}</span>
+                          </div>
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Bills Issued</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">{activeMetrics.invoiceCount}</span>
+                          </div>
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Avg Bill Value</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">₹{activeMetrics.averageBill.toFixed(2)}</span>
+                          </div>
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Total Units Sold</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">{activeMetrics.totalItemsSold} qty</span>
+                          </div>
+                        </div>
+
+                        {/* Selling diagnostics summary */}
+                        <div className="p-2.5 bg-stone-50 border rounded-lg space-y-1.5">
+                          <span className="text-[9px] font-bold text-stone-400 uppercase block tracking-wider"><i className="fa-solid fa-chart-line"></i> Performance Analysis</span>
+                          
+                          <div className="divide-y divide-stone-100 text-[10px]">
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Product (by Qty):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topProductQty[0]} <span className="text-stone-400 font-normal">({activeMetrics.topProductQty[1]} sold)</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Product (by Amount):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topProductRev[0]} <span className="text-stone-400 font-normal">(₹{activeMetrics.topProductRev[1].toFixed(0)})</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Category (by Qty):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topCategoryQty[0]} <span className="text-stone-400 font-normal">({activeMetrics.topCategoryQty[1]} sold)</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Category (by Amount):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topCategoryRev[0]} <span className="text-stone-400 font-normal">(₹{activeMetrics.topCategoryRev[1].toFixed(0)})</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Highest Bill Invoiced:</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.highestBill.customer} <span className="text-stone-400 font-normal">(₹{activeMetrics.highestBill.amount.toFixed(0)})</span></span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sub-tab 3: AI diagnostics Consultant */}
+                    {logsSubTab === "ai" && (
+                      <div className="space-y-3 animate-fadeIn">
+                        <div className="p-2 bg-stone-50 border rounded text-[9px] text-stone-500 leading-relaxed">
+                          <i className="fa-solid fa-robot"></i> Ask questions like: *"Which categories are most popular?"*, *"Who are our biggest clients?"*, or *"Which item sold best?"*.
+                        </div>
+
+                        <div className="flex gap-1.5">
+                          <input 
+                            type="text" 
+                            placeholder="Ask any store analytics query..." 
+                            value={aiQuery} 
+                            onChange={e => setAiQuery(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleAskAiAdvisor(); }}
+                            className="flex-grow px-2 py-1.5 text-xs border rounded bg-stone-50 font-semibold focus:outline-none"
+                          />
+                          <button 
+                            type="button" 
+                            onClick={handleAskAiAdvisor}
+                            disabled={aiLoading}
+                            className="bg-stone-900 text-white font-bold text-xs px-3 rounded flex items-center justify-center min-w-[50px]"
+                          >
+                            {aiLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : "Query"}
+                          </button>
+                        </div>
+
+                        {aiResponse && (
+                          <div className="p-3 border rounded bg-stone-50 text-xs space-y-1 text-stone-800 max-h-56 overflow-y-auto custom-scroll leading-relaxed">
+                            <span className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block">AI Consultant Output</span>
+                            <div className="font-sans whitespace-pre-wrap">{aiResponse}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ADJOINING TAB B: PUBLIC PRINTER DASHBOARD */}
+            {currentTab === "printer" && (
+              <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-3.5 space-y-3">
+                <div className="flex justify-between items-center mb-2 pb-2 border-b border-stone-200">
+                  <span className="font-bold text-stone-700 uppercase tracking-wider"><i className="fa-solid fa-print"></i> Seznik Veer Connection Control</span>
+                  <span className={`px-2 py-0.5 rounded text-[8px] font-bold ${printerStatus.includes('Connected') || printerStatus.includes('Ready') ? 'bg-emerald-100 text-emerald-800':'bg-amber-100 text-amber-800'}`}>{printerStatus}</span>
+                </div>
+
+                {/* Interactive Selection Block */}
+                <div className="space-y-2">
+                  <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide">Select Interface Method</label>
+                  <div className="grid grid-cols-1 gap-2">
+                    <button 
+                      onClick={() => {}} 
+                      className="py-2 px-3 rounded-lg border text-center transition-all bg-stone-900 text-white border-stone-900 flex flex-col items-center justify-center gap-1 font-semibold"
+                    >
+                      <i className="fa-solid fa-plug text-sm"></i>
+                      <span>USB OTG Line</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Interactive Execution Action Buttons */}
+                <div className="pt-2 space-y-2">
+                  <button 
+                    onClick={connectWebUsbPrinter} 
+                    className="w-full py-2 bg-stone-900 hover:bg-stone-800 text-white font-bold rounded-lg flex items-center justify-center gap-2"
+                  >
+                    <i className="fa-solid fa-link"></i>
+                    <span>Connect Seznik USB Printer</span>
+                  </button>
+
+                  <button 
+                    onClick={triggerTestPrint} 
+                    disabled={!printerDevice}
+                    className="w-full py-2 border-2 border-stone-900 hover:bg-stone-100 disabled:border-stone-200 disabled:text-stone-300 font-bold rounded-lg flex items-center justify-center gap-2"
+                  >
+                    <i className="fa-solid fa-arrows-spin"></i>
+                    <span>Execute Physical Test Print</span>
+                  </button>
+                </div>
+
+                {/* Device Diagnostic Output logs */}
+                <div className="pt-2 mt-2 border-t border-stone-200 bg-white p-2.5 rounded border">
+                  <span className="block text-[8px] font-bold text-stone-400 uppercase tracking-widest mb-1">Configuration Diagnostic Logs</span>
+                  <div className="font-mono text-[9px] text-stone-600 space-y-1">
+                    <div>Paper Width: <span className="font-bold text-stone-900">60mm (Optimized)</span></div>
+                    <div>Device Type: <span className="font-bold text-stone-900">USB interface</span></div>
+                    <div>Hardware Name: <span className="font-bold text-stone-900">{printerDevice?.productName || "POS-58 (Veer)"}</span></div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* Delete Bill Confirmation Modal */}
+          {billToDelete && (
+            <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 no-print animate-fadeIn">
+              <div className="bg-white rounded-xl border p-4 max-w-xs w-full space-y-3 shadow-xl">
+                <div className="text-amber-600 text-lg"><i className="fa-solid fa-triangle-exclamation"></i> Danger Action</div>
+                <h3 className="text-xs font-bold text-stone-800">Are you sure you want to delete this bill?</h3>
+                <p className="text-[10px] text-stone-500">This action will permanently delete the invoice log for "{billToDelete.customerName}" amounting to ₹{parseFloat(billToDelete.totalAmount || 0).toFixed(2)} from Cloud.</p>
+                <div className="flex gap-1.5 justify-end">
+                  <button onClick={() => setBillToDelete(null)} className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 border rounded text-[10px] font-bold">Cancel</button>
+                  <button onClick={handleConfirmDeleteBill} className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10px] font-bold">Confirm Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
