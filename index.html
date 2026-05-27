@@ -1,0 +1,1551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Rough Bill Generator</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- html2pdf.js for clean PDF download -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['Courier Prime', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Absolute Printing Fix: Styled specifically for SEZNIK Veer 58mm (2 Inch) Portable Printer */
+    @media print {
+      body * {
+        visibility: hidden !important;
+      }
+      #printable-bill-invoice, #printable-bill-invoice * {
+        visibility: visible !important;
+      }
+      #printable-bill-invoice {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        width: 58mm !important;
+        max-width: 58mm !important;
+        margin: 0 !important;
+        padding: 4px !important;
+        border: none !important;
+        box-shadow: none !important;
+        background: white !important;
+        color: black !important;
+        font-family: 'Courier Prime', monospace !important;
+        font-size: 10px !important;
+      }
+      @page {
+        margin: 0;
+      }
+    }
+
+    /* Custom scrollbar */
+    .custom-scroll::-webkit-scrollbar {
+      width: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: #f1f1f1;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #ccc;
+      border-radius: 2px;
+    }
+
+    /* Smooth focus adjustments when keyboard is open on mobile */
+    input:focus {
+      scroll-margin-top: 80px;
+    }
+  </style>
+</head>
+<body class="bg-stone-50 text-stone-900 min-h-screen font-sans antialiased selection:bg-stone-300">
+
+  <div id="root" class="min-h-screen flex flex-col"></div>
+
+  <!-- React & Babel CDNs -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    const fallbackAppId = 'minimalistic-rough-bill-gen';
+    const fallbackFirebaseConfig = {
+      apiKey: "AIzaSyC4ha5NdXyCFOYW8QApcWohBo_6BS6wGRk",
+      authDomain: "myroughbillapp.firebaseapp.com",
+      projectId: "myroughbillapp",
+      storageBucket: "myroughbillapp.firebasestorage.app",
+      messagingSenderId: "683327665576",
+      appId: "1:683327665576:web:ecb33e232260125397199d"
+    };
+
+    const appId = typeof __app_id !== 'undefined' ? __app_id : fallbackAppId;
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackFirebaseConfig;
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+    let app, auth, db;
+    try {
+      app = initializeApp(firebaseConfig);
+      auth = getAuth(app);
+      db = getFirestore(app);
+    } catch (e) {
+      console.warn("Could not load real Firebase credentials.", e);
+    }
+
+    window.firebaseBridge = {
+      db, auth, appId, initialAuthToken, connected: false,
+      products: [], bills: [], customers: [],
+      doc, getDoc, setDoc, collection, addDoc, updateDoc, deleteDoc,
+      signInAnonymously, signInWithCustomToken, onAuthStateChanged, onSnapshot,
+      saveBillToCloud: async (bill) => await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'bills'), { ...bill, timestamp: Date.now() }),
+      updateBillInCloud: async (id, bill) => await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', id), { ...bill, timestamp: Date.now() }),
+      deleteBillFromCloud: async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', id)),
+      addProductToCloud: async (prod) => await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { ...prod, timestamp: Date.now() }),
+      deleteProductFromCloud: async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id))
+    };
+  </script>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    function App() {
+      const [currentTab, setCurrentTab] = useState("bill");
+      const [customerName, setCustomerName] = useState("");
+      const [customerCity, setCustomerCity] = useState("");
+      const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
+      
+      const [discountX, setDiscountX] = useState("0"); 
+      const [qty, setQty] = useState("1");
+      const [productSearch, setProductSearch] = useState("");
+      const [selectedProduct, setSelectedProduct] = useState(null);
+      const [code, setCode] = useState("");
+      const [price, setPrice] = useState("");
+      const [addedItems, setAddedItems] = useState([]);
+      const [dbCustomers, setDbCustomers] = useState([]);
+      const [firestoreCustomers, setFirestoreCustomers] = useState([]);
+      const [cloudProducts, setCloudProducts] = useState([]);
+      const [cloudBills, setCloudBills] = useState([]);
+      const [showCustSuggestions, setShowCustSuggestions] = useState(false);
+      const [showProdSuggestions, setShowProdSuggestions] = useState(false);
+      const [editingBillId, setEditingBillId] = useState(null);
+      const [isBillGenerated, setIsBillGenerated] = useState(false);
+      const [generatedItems, setGeneratedItems] = useState([]);
+      const [notification, setNotification] = useState("");
+      
+      // UI Modes & Toggles - By default, use Bulk Entry Method
+      const [showBulkMode, setShowBulkMode] = useState(true);
+      const [bulkInput, setBulkInput] = useState("");
+
+      const [newProdName, setNewProdNameState] = useState("");
+      const [newProdCategory, setNewProdCategory] = useState("");
+      const [productFilterQuery, setProductFilterQuery] = useState("");
+
+      // Customer Status States
+      const [isNewCustomer, setIsNewCustomer] = useState(false);
+      const [pendingDiscountPrompt, setPendingDiscountPrompt] = useState(false);
+
+      // WebUSB Thermal Printer States
+      const [printerDevice, setPrinterDevice] = useState(null);
+      const [printerStatus, setPrinterStatus] = useState("Disconnected");
+
+      // Password Log Verification State
+      const [isVerified, setIsVerified] = useState(false);
+      const [passwordInput, setPasswordInput] = useState("");
+
+      // Product Merging State
+      const [mergeSource, setMergeSource] = useState("");
+      const [mergeTarget, setMergeTarget] = useState("");
+
+      // Logs & Metrics Dashboard States
+      const [logsSubTab, setLogsSubTab] = useState("list"); // "list", "metrics", "ai"
+      const [metricsRange, setMetricsRange] = useState("7"); // "7", "14", "30", "90", "custom"
+      const [customStartDate, setCustomStartDate] = useState("");
+      const [customEndDate, setCustomEndDate] = useState("");
+      const [billToDelete, setBillToDelete] = useState(null);
+
+      // AI Chat States
+      const [aiQuery, setAiQuery] = useState("");
+      const [aiResponse, setAiResponse] = useState("");
+      const [aiLoading, setAiLoading] = useState(false);
+
+      // User state
+      const [user, setUser] = useState(null);
+
+      const custRef = useRef(null);
+      const prodRef = useRef(null);
+
+      // Helper to generate 3-letter codes
+      const getThreeLetterCode = (val) => {
+        if (!val) return "GEN";
+        const cleaned = val.replace(/[^a-zA-Z]/g, "").toUpperCase();
+        return cleaned.slice(0, 3) || "GEN";
+      };
+
+      // Search and match customer profile in cloud
+      const syncCustomerProfile = async (targetName, cityFromSheet = "") => {
+        const { db, appId, doc, getDoc } = window.firebaseBridge || {};
+        if (!db || !targetName.trim()) return;
+
+        try {
+          const cleanName = targetName.trim();
+          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'customers', cleanName);
+          const docSnap = await getDoc(docRef);
+
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            setDiscountX(String(data.discount || 0));
+            if (data.city) setCustomerCity(data.city);
+            setIsNewCustomer(false);
+            setPendingDiscountPrompt(false);
+          } else {
+            // New Customer detected - triggers prompt
+            setIsNewCustomer(true);
+            setPendingDiscountPrompt(true);
+            setDiscountX("");
+            if (cityFromSheet) setCustomerCity(cityFromSheet);
+          }
+        } catch (err) {
+          console.error("Profile sync exception:", err);
+        }
+      };
+
+      const handleSaveNewCustomerDiscount = async (enteredDiscount) => {
+        const { db, appId, doc, setDoc } = window.firebaseBridge || {};
+        const cleanName = customerName.trim();
+        if (!db || !cleanName) return;
+
+        const numDisc = parseFloat(enteredDiscount) || 0;
+        try {
+          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'customers', cleanName);
+          await setDoc(docRef, {
+            name: cleanName,
+            city: customerCity || "",
+            discount: numDisc,
+            timestamp: Date.now()
+          });
+          setDiscountX(String(numDisc));
+          setPendingDiscountPrompt(false);
+          setIsNewCustomer(false);
+          triggerNotification(`Success: Registered ${cleanName} with ${numDisc}% discount!`);
+        } catch (e) {
+          console.error("Failed saving new customer configuration:", e);
+        }
+      };
+
+      // Pull Google Sheets customer list dynamically
+      useEffect(() => {
+        const callbackName = "jsonp_callback_" + Math.floor(Math.random() * 100000);
+        window[callbackName] = (data) => {
+          if (data && data.customers) {
+            const parsed = [];
+            const rawCustomers = data.customers;
+            if (typeof rawCustomers === "object" && !Array.isArray(rawCustomers)) {
+              Object.entries(rawCustomers).forEach(([name, details]) => {
+                parsed.push({
+                  name: name.trim(),
+                  city: details ? ((details.City || details.city || "").trim()) : ""
+                });
+              });
+            } else if (Array.isArray(rawCustomers)) {
+              rawCustomers.forEach(c => {
+                if (typeof c === "string") {
+                  parsed.push({ name: c.trim(), city: "" });
+                } else if (c && typeof c === "object") {
+                  parsed.push({
+                    name: (c.Name || c.name || "").trim(),
+                    city: (c.City || c.city || "").trim()
+                  });
+                }
+              });
+            }
+            setDbCustomers(parsed);
+          }
+        };
+
+        const script = document.createElement("script");
+        script.src = `https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec?action=getData&callback=${callbackName}`;
+        document.body.appendChild(script);
+      }, []);
+
+      // Rule 3: Authenticate FIRST before running queries
+      useEffect(() => {
+        const { auth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, initialAuthToken } = window.firebaseBridge || {};
+        if (!auth) return;
+
+        const performAuthentication = async () => {
+          try {
+            if (initialAuthToken) {
+              await signInWithCustomToken(auth, initialAuthToken);
+            } else {
+              await signInAnonymously(auth);
+            }
+          } catch (e) {
+            console.error("Firebase Authentication failed:", e);
+          }
+        };
+
+        performAuthentication();
+
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+          setUser(currentUser);
+          if (currentUser) {
+            window.firebaseBridge.connected = true;
+          }
+        });
+
+        return () => unsubscribe();
+      }, []);
+
+      // Realtime Snapshot subscriptions setup only if authenticated (Rule 3)
+      useEffect(() => {
+        if (!user) return;
+        const { db, appId, collection, onSnapshot } = window.firebaseBridge || {};
+        if (!db) return;
+
+        const unsubProducts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (snapshot) => {
+          const list = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+          setCloudProducts(list);
+          window.firebaseBridge.products = list;
+        }, (err) => console.error("Snapshot error on products:", err));
+
+        const unsubBills = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'bills'), (snapshot) => {
+          const list = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+          list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          setCloudBills(list);
+          window.firebaseBridge.bills = list;
+        }, (err) => console.error("Snapshot error on bills:", err));
+
+        const unsubCustomers = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'customers'), (snapshot) => {
+          const list = [];
+          snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
+          setFirestoreCustomers(list);
+          window.firebaseBridge.customers = list;
+        }, (err) => console.error("Snapshot error on customers:", err));
+
+        return () => {
+          unsubProducts();
+          unsubBills();
+          unsubCustomers();
+        };
+      }, [user]);
+
+      useEffect(() => {
+        function handleClickOutside(event) {
+          if (custRef.current && !custRef.current.contains(event.target)) setShowCustSuggestions(false);
+          if (prodRef.current && !prodRef.current.contains(event.target)) setShowProdSuggestions(false);
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+      }, []);
+
+      const handleCodeChange = (val) => {
+        setCode(val);
+        const cleaned = val.trim().toLowerCase();
+        if (cleaned !== "") {
+          const isNet = cleaned.endsWith('n');
+          const numPart = parseFloat(isNet ? cleaned.slice(0, -1) : cleaned);
+          if (!isNaN(numPart)) {
+            const computed = numPart * 5;
+            setPrice(computed > 0 ? computed.toString() : "");
+          }
+        } else {
+          setPrice("");
+        }
+      };
+
+      const handleCustomerBlur = () => {
+        setTimeout(() => {
+          const val = customerName.trim();
+          if (val === "") {
+            setCustomerCity("");
+            setDiscountX("0");
+            setIsNewCustomer(false);
+            setPendingDiscountPrompt(false);
+            return;
+          }
+          const match = dbCustomers.find(c => c.name.toLowerCase() === val.toLowerCase()) || 
+                        firestoreCustomers.find(c => c.name.toLowerCase() === val.toLowerCase());
+          if (match) {
+            setCustomerName(match.name);
+            setCustomerCity(match.city);
+            syncCustomerProfile(match.name, match.city);
+          } else {
+            syncCustomerProfile(val, "");
+          }
+        }, 200);
+      };
+
+      const triggerNotification = (msg) => {
+        setNotification(msg);
+        setTimeout(() => setNotification(""), 4000);
+      };
+
+      // Method 2: Bulk Entry Parser with fallback to previous product name if missing
+      // Fixed: Allows none or only 1 space inside product name, supports categories separated with +
+      const processBulkAdd = async () => {
+        const tokens = bulkInput.trim().split(/\s+/);
+        const newItems = [];
+        let i = 0;
+        const numericDiscount = parseFloat(discountX) || 0;
+        let lastProductName = "";
+
+        const isTokenPriceOrCode = (t) => {
+          if (!t) return false;
+          return t.toLowerCase().endsWith('n') || t.toLowerCase().endsWith('l') || !isNaN(parseFloat(t));
+        };
+
+        while (i < tokens.length) {
+          let token1 = tokens[i++];
+          if (!token1) break;
+
+          let q = parseInt(token1);
+          let n = "";
+          let c = "";
+
+          if (isNaN(q)) {
+            triggerNotification("Parsing Error: Elements must begin with a Quantity number.");
+            return;
+          }
+
+          // Build product name - allowed up to 1 space (max 2 tokens) until the next token is a price code
+          let nameTokens = [];
+          while (i < tokens.length && !isTokenPriceOrCode(tokens[i])) {
+            nameTokens.push(tokens[i++]);
+          }
+
+          // Force max 1 space restriction (at most 2 tokens)
+          if (nameTokens.length > 2) {
+            triggerNotification("Restriction Fault: At most 1 space is allowed in bulk product names.");
+            return;
+          }
+
+          let codeToken = tokens[i++];
+
+          if (nameTokens.length === 0) {
+            // Product name is missing - fallback to previous
+            if (!lastProductName) {
+              triggerNotification("Parser Error: No prior product name staged in memory.");
+              return;
+            }
+            n = lastProductName;
+            c = codeToken || "0";
+          } else {
+            n = nameTokens.join(" ");
+            c = codeToken || "0";
+            lastProductName = n;
+          }
+
+          // Parse Category + Name or Name + Category patterns
+          let finalCategory = "General";
+          let finalProductName = n;
+
+          if (n.includes('+')) {
+            const parts = n.split('+').map(p => p.trim());
+            if (parts.length === 2) {
+              const knownCategories = Array.from(new Set(cloudProducts.map(p => (p.category || "General").toLowerCase())));
+              if (knownCategories.includes(parts[0].toLowerCase())) {
+                finalCategory = parts[0];
+                finalProductName = parts[1];
+              } else if (knownCategories.includes(parts[1].toLowerCase())) {
+                finalCategory = parts[1];
+                finalProductName = parts[0];
+              } else {
+                finalCategory = parts[0];
+                finalProductName = parts[1];
+              }
+            }
+          }
+
+          let calculatedUnitPrice = 0;
+          const cleanedCode = c.toLowerCase();
+          
+          if (cleanedCode.endsWith('n')) {
+            calculatedUnitPrice = parseFloat(cleanedCode.slice(0, -1)) * 5;
+          } else if (cleanedCode.endsWith('l')) {
+            const base = parseFloat(cleanedCode.slice(0, -1)) * 5;
+            calculatedUnitPrice = base - (base * (numericDiscount / 100));
+          } else {
+            calculatedUnitPrice = parseFloat(cleanedCode);
+          }
+
+          const isKnownProduct = cloudProducts.some(p => p.name.toLowerCase() === finalProductName.toLowerCase());
+          if (!isKnownProduct && finalProductName && finalProductName !== "Item") {
+            const payload = { name: finalProductName, category: finalCategory, code: "", price: "" };
+            await window.firebaseBridge.addProductToCloud(payload);
+          }
+
+          newItems.push({
+            id: Date.now() + Math.random(),
+            qty: q,
+            name: finalProductName,
+            category: finalCategory,
+            code: c,
+            basePrice: calculatedUnitPrice,
+            finalUnitPrice: calculatedUnitPrice,
+            totalAmount: q * calculatedUnitPrice,
+            isOverride: false,
+            labelType: "BulkStream"
+          });
+        }
+
+        if (newItems.length > 0) {
+          setAddedItems(prev => [...prev, ...newItems]);
+          // Note: Bulk Input text area is NOT emptied here so that you don't lose work before generating the bill.
+          triggerNotification(`Staged ${newItems.length} items from bulk input!`);
+        }
+      };
+
+      const handleAddItem = async () => {
+        const queryName = productSearch.trim();
+        if (!queryName) {
+          triggerNotification("Please type or select a product!");
+          return;
+        }
+
+        const enteredPrice = parseFloat(price) || 0;
+        if (enteredPrice <= 0) {
+          triggerNotification("Item price must be greater than 0!");
+          return;
+        }
+        const parsedQty = parseFloat(qty || "1") || 1;
+
+        const exactMatch = cloudProducts.find(p => p.name.toLowerCase() === queryName.toLowerCase());
+        let productObj = exactMatch;
+        if (!exactMatch) {
+          try {
+            const payload = { name: queryName, category: "General", code: "", price: "" };
+            await window.firebaseBridge.addProductToCloud(payload);
+            productObj = payload;
+            triggerNotification(`Added new product "${queryName}" to catalog list.`);
+          } catch(e) {
+            console.error("New product auto-add failed:", e);
+          }
+        }
+
+        let expectedPrice = enteredPrice;
+        let isOverride = false;
+        const cleanedCode = code.trim().toLowerCase();
+        
+        if (cleanedCode !== "" && cleanedCode !== "—") {
+          const isNet = cleanedCode.endsWith('n');
+          const isDisc = cleanedCode.endsWith('l');
+          const valString = (isNet || isDisc) ? cleanedCode.slice(0, -1) : cleanedCode;
+          const codeVal = parseFloat(valString);
+          
+          if (!isNaN(codeVal)) {
+            const baseMultiplier = codeVal * 5;
+            if (isNet) {
+              expectedPrice = baseMultiplier;
+            } else {
+              const discountVal = parseFloat(discountX) || 0;
+              expectedPrice = baseMultiplier - (baseMultiplier * (discountVal / 100));
+            }
+          }
+          if (Math.abs(expectedPrice - enteredPrice) > 0.01) {
+            isOverride = true;
+          }
+        }
+        
+        setAddedItems(prev => [...prev, {
+          id: Date.now(),
+          qty: parsedQty,
+          name: productObj.name,
+          category: productObj.category || "General",
+          code: code.trim() || "—",
+          basePrice: enteredPrice,
+          finalUnitPrice: enteredPrice,
+          totalAmount: parsedQty * enteredPrice,
+          isOverride: isOverride,
+          labelType: code.trim().toLowerCase().endsWith('n') ? "Net" : "Manual"
+        }]);
+        setCode(""); setPrice(""); setQty("1");
+        triggerNotification("Product staged successfully!");
+      };
+
+      const handleProductMerge = async () => {
+        const source = mergeSource.trim();
+        const target = mergeTarget.trim();
+        if (!source || !target) {
+          triggerNotification("Specify both source and target names.");
+          return;
+        }
+
+        const sourceItem = cloudProducts.find(p => p.name.toLowerCase() === source.toLowerCase());
+        const targetItem = cloudProducts.find(p => p.name.toLowerCase() === target.toLowerCase());
+
+        if (!sourceItem || !targetItem) {
+          triggerNotification("Both products must exist in database to merge.");
+          return;
+        }
+
+        try {
+          await window.firebaseBridge.deleteProductFromCloud(sourceItem.id);
+          setAddedItems(prev => prev.map(item => {
+            if (item.name.toLowerCase() === source.toLowerCase()) {
+              return { ...item, name: targetItem.name, category: targetItem.category || "General" };
+            }
+            return item;
+          }));
+          setMergeSource("");
+          setMergeTarget("");
+          triggerNotification(`Successfully merged "${source}" into "${target}"!`);
+        } catch (e) {
+          console.error("Merging error:", e);
+        }
+      };
+
+      // Fixed: Calls doPost using JSON content to store the final computed bill amount in Google Sheets
+      const saveLedgerTransactionToSheet = async (clientName, invoiceAmount) => {
+        const sheetsScriptUrl = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
+        
+        const payloadData = {
+          action: 'addTxn',
+          txn: {
+            id: String(Date.now() + Math.round(Math.random() * 100)),
+            name: clientName,
+            amount: Number(invoiceAmount),
+            date: billDate,
+            type: 'bill',
+            remarks: "Sync Ledger"
+          },
+          customer: {
+            name: clientName,
+            phone: "",
+            date: billDate,
+            city: customerCity || ""
+          }
+        };
+
+        try {
+          await fetch(sheetsScriptUrl, {
+            method: "POST",
+            mode: "no-cors",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payloadData)
+          });
+          triggerNotification("Ledger registered on Google Sheets!");
+        } catch (sheetsErr) {
+          console.error("Sheets transaction POST exception:", sheetsErr);
+        }
+      };
+
+      const connectWebUsbPrinter = async () => {
+        try {
+          const device = await navigator.usb.requestDevice({ filters: [] });
+          await device.open();
+          await device.selectConfiguration(1);
+          await device.claimInterface(0);
+          setPrinterDevice(device);
+          setPrinterStatus("Connected to USB Printer (80mm)");
+          triggerNotification("WebUSB Thermal Printer connected!");
+        } catch (e) {
+          setPrinterStatus("Failed Connection");
+          console.error(e);
+        }
+      };
+
+      const handleGenerateClick = async () => {
+        if (addedItems.length === 0) return;
+        const numericDiscount = parseFloat(discountX) || 0;
+        
+        // "customer without name save data named cash"
+        const enteredCustomerName = customerName.trim();
+        const activeCustomer = enteredCustomerName || "Cash";
+
+        const { db, appId, doc, setDoc } = window.firebaseBridge || {};
+        if (db && activeCustomer !== "Cash") {
+          try {
+            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'customers', activeCustomer);
+            await setDoc(docRef, {
+              name: activeCustomer,
+              city: customerCity || "",
+              discount: numericDiscount,
+              timestamp: Date.now()
+            }, { merge: true });
+          } catch (e) {
+            console.error("Cloud parameters update failure:", e);
+          }
+        }
+
+        const finalCalculatedItems = addedItems.map(item => {
+          let finalPrice = item.basePrice;
+          let labelType = item.labelType;
+
+          if (item.code !== "—" && item.code !== "" && labelType !== "BulkStream") {
+            const cleanedNumStr = item.code.toLowerCase();
+            const isNet = cleanedNumStr.endsWith('n');
+            const numericPart = parseFloat(isNet ? cleanedNumStr.slice(0, -1) : cleanedNumStr) || 0;
+            const basePrice = numericPart * 5;
+
+            if (isNet) {
+              finalPrice = basePrice;
+              labelType = "Net";
+            } else {
+              finalPrice = basePrice - (basePrice * (numericDiscount / 100));
+              labelType = "Disc";
+            }
+          }
+          return { ...item, finalUnitPrice: finalPrice, totalAmount: item.qty * finalPrice, labelType };
+        });
+
+        finalCalculatedItems.sort((a, b) => a.name.localeCompare(b.name));
+        setGeneratedItems(finalCalculatedItems);
+        setIsBillGenerated(true);
+
+        const calculatedBillTotal = finalCalculatedItems.reduce((sum, i) => sum + i.totalAmount, 0);
+
+        // "only store data where customer name is filled"
+        if (enteredCustomerName !== "") {
+          await saveLedgerTransactionToSheet(activeCustomer, calculatedBillTotal);
+        }
+
+        if (db && window.firebaseBridge.connected) {
+          const rawBillObject = {
+            customerName: activeCustomer,
+            customerCity: customerCity || "",
+            date: billDate,
+            items: finalCalculatedItems,
+            totalAmount: calculatedBillTotal,
+            discountRate: numericDiscount
+          };
+
+          try {
+            if (editingBillId) {
+              await window.firebaseBridge.updateBillInCloud(editingBillId, rawBillObject);
+            } else {
+              const docRef = await window.firebaseBridge.saveBillToCloud(rawBillObject);
+              if (docRef?.id) setEditingBillId(docRef.id);
+            }
+            triggerNotification("Invoice copy generated & synchronized!");
+            // Bulk entry text is emptied ONLY when successfully generated
+            setBulkInput("");
+          } catch (err) {
+            console.error("Cloud synchronization failure:", err);
+          }
+        }
+
+        setTimeout(() => {
+          window.print();
+        }, 150);
+      };
+
+      const handleResetAll = () => {
+        setCustomerName(""); setCustomerCity(""); setDiscountX("0");
+        setQty("1"); setProductSearch(""); setSelectedProduct(null); setCode(""); setPrice("");
+        setAddedItems([]); setGeneratedItems([]); setIsBillGenerated(false); setEditingBillId(null);
+        setIsNewCustomer(false); setPendingDiscountPrompt(false); setBulkInput("");
+      };
+
+      const handleLoadHistoricalBill = (billRecord) => {
+        const cleanName = (billRecord.customerName === "Walk-In Customer" || billRecord.customerName === "Cash") ? "" : billRecord.customerName;
+        setCustomerName(cleanName);
+        setCustomerCity(billRecord.customerCity || "");
+        setBillDate(billRecord.date);
+        setEditingBillId(billRecord.id);
+        setDiscountX(String(billRecord.discountRate || 0));
+        setIsNewCustomer(false);
+        setPendingDiscountPrompt(false);
+        
+        const loadedItems = (billRecord.items || []).map((item, idx) => ({
+          id: idx + Date.now(),
+          qty: item.qty, name: item.name, category: item.category || "General",
+          code: item.code, basePrice: item.basePrice || item.finalUnitPrice, finalUnitPrice: item.finalUnitPrice,
+          totalAmount: item.totalAmount, isOverride: item.isOverride || false, labelType: item.labelType
+        }));
+
+        setAddedItems(loadedItems);
+        setGeneratedItems(billRecord.items || []);
+        setIsBillGenerated(true);
+        setCurrentTab("bill");
+      };
+
+      // Handler for billing deletion
+      const handleConfirmDeleteBill = async () => {
+        if (!billToDelete) return;
+        try {
+          await window.firebaseBridge.deleteBillFromCloud(billToDelete.id);
+          setBillToDelete(null);
+          triggerNotification("Transaction log successfully removed.");
+        } catch (e) {
+          console.error("Failed to delete log document:", e);
+        }
+      };
+
+      // Ascending alphabetical logic grouped by Categories first, then Product Names
+      const getSortedProducts = () => {
+        return [...cloudProducts].sort((a, b) => {
+          const catComp = (a.category || "General").localeCompare(b.category || "General", undefined, { sensitivity: 'base' });
+          if (catComp !== 0) return catComp;
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        });
+      };
+
+      const filteredProductsForBilling = searchQuery => {
+        const sorted = getSortedProducts();
+        if (!searchQuery.trim()) return sorted.slice(0, 15);
+        return sorted.filter(p => 
+          p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          (p.category && p.category.toLowerCase().includes(searchQuery.toLowerCase()))
+        ).slice(0, 15);
+      };
+
+      // Simple password check without verify button
+      const handleTabVerificationInput = (val) => {
+        setPasswordInput(val);
+        if (val === "b") {
+          setIsVerified(true);
+        }
+      };
+
+      const handleProductAddSubmit = async (e) => {
+        e.preventDefault();
+        const trimmedName = newProdName.trim();
+        const categoryVal = newProdCategory.trim() || "General";
+        if (!trimmedName) return;
+
+        const isDuplicate = cloudProducts.some(p => p.name.trim().toLowerCase() === trimmedName.toLowerCase());
+        if (isDuplicate) {
+          triggerNotification(`Error: "${trimmedName}" already exists!`);
+          return;
+        }
+
+        const payload = { name: trimmedName, category: categoryVal, code: "", price: "" };
+        if (window.firebaseBridge && window.firebaseBridge.connected) {
+          try {
+            await window.firebaseBridge.addProductToCloud(payload);
+            setNewProdNameState(""); setNewProdCategory("");
+            triggerNotification("Cataloged successfully!");
+          } catch (err) {
+            console.error(err);
+          }
+        }
+      };
+
+      const handleProductDelete = async (id) => {
+        if (window.firebaseBridge && window.firebaseBridge.connected) {
+          try {
+            await window.firebaseBridge.deleteProductFromCloud(id);
+          } catch (err) {
+            console.error(err);
+          }
+        }
+      };
+
+      // Metrics computation engine based on date ranges
+      const computeActiveMetrics = () => {
+        let filtered = [...cloudBills];
+        
+        if (metricsRange !== "all") {
+          const today = new Date();
+          let threshold = new Date();
+          
+          if (metricsRange === "7") threshold.setDate(today.getDate() - 7);
+          else if (metricsRange === "14") threshold.setDate(today.getDate() - 14);
+          else if (metricsRange === "30") threshold.setDate(today.getDate() - 30);
+          else if (metricsRange === "90") threshold.setDate(today.getDate() - 90);
+          else if (metricsRange === "custom" && customStartDate && customEndDate) {
+            const start = new Date(customStartDate);
+            const end = new Date(customEndDate);
+            filtered = filtered.filter(b => {
+              const d = new Date(b.date);
+              return d >= start && d <= end;
+            });
+          }
+
+          if (metricsRange !== "custom") {
+            filtered = filtered.filter(b => {
+              const d = new Date(b.date);
+              return d >= threshold;
+            });
+          }
+        }
+
+        let totalRevenue = 0;
+        let totalItemsSold = 0;
+        let categoryQty = {};
+        let categoryRevenue = {};
+        let productQty = {};
+        let productRevenue = {};
+        let highestBill = { customer: "N/A", amount: 0 };
+
+        filtered.forEach(b => {
+          const totalAmt = parseFloat(b.totalAmount || 0);
+          totalRevenue += totalAmt;
+          
+          if (totalAmt > highestBill.amount) {
+            highestBill = { customer: b.customerName || "Walk-In", amount: totalAmt };
+          }
+
+          if (b.items && Array.isArray(b.items)) {
+            b.items.forEach(i => {
+              const qty = Number(i.qty || 0);
+              const itemTotal = Number(i.totalAmount || 0);
+              const cat = i.category || "General";
+              const name = i.name || "Unknown";
+
+              totalItemsSold += qty;
+              categoryQty[cat] = (categoryQty[cat] || 0) + qty;
+              categoryRevenue[cat] = (categoryRevenue[cat] || 0) + itemTotal;
+              productQty[name] = (productQty[name] || 0) + qty;
+              productRevenue[name] = (productRevenue[name] || 0) + itemTotal;
+            });
+          }
+        });
+
+        const findTopValue = (map) => {
+          return Object.entries(map).sort((a, b) => b[1] - a[1])[0] || ["None", 0];
+        };
+
+        return {
+          totalRevenue,
+          invoiceCount: filtered.length,
+          averageBill: filtered.length > 0 ? (totalRevenue / filtered.length) : 0,
+          totalItemsSold,
+          topCategoryQty: findTopValue(categoryQty),
+          topCategoryRev: findTopValue(categoryRevenue),
+          topProductQty: findTopValue(productQty),
+          topProductRev: findTopValue(productRevenue),
+          highestBill
+        };
+      };
+
+      const activeMetrics = computeActiveMetrics();
+
+      // Gemini Store Analytics AI Advisor
+      const handleAskAiAdvisor = async () => {
+        if (!aiQuery.trim()) return;
+        setAiLoading(true);
+        setAiResponse("");
+
+        // Construct highly compressed representation of our transaction history
+        const billHistorySummary = cloudBills.map(b => ({
+          date: b.date,
+          cust: b.customerName,
+          total: b.totalAmount,
+          items: (b.items || []).map(i => ({ name: i.name, qty: i.qty, cat: i.category, val: i.totalAmount }))
+        }));
+
+        const systemInstructions = `You are "Rough Bill AI Business Consultant", a fast diagnostic expert.
+        Use the JSON database of store transaction history provided to answer user queries with precise numerical data, dates (such as May 21st, 2022), top customers, and item summaries.
+        Keep answers clean, concise, formatted with bullet points in markdown.
+        Database Context: ${JSON.stringify(billHistorySummary)}`;
+
+        let retries = 5;
+        let delay = 1000;
+        let responseText = "";
+
+        while (retries > 0) {
+          try {
+            const endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=";
+            const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: aiQuery }] }],
+                systemInstruction: { parts: [{ text: systemInstructions }] }
+              })
+            });
+
+            if (!res.ok) throw new Error("API status fault: " + res.status);
+            const resData = await res.json();
+            responseText = resData.candidates?.[0]?.content?.parts?.[0]?.text || "No summary formulated.";
+            break;
+          } catch (e) {
+            retries--;
+            if (retries === 0) {
+              responseText = "Diagnostic Advisor currently busy. Please check back later.";
+            } else {
+              await new Promise(resolve => setTimeout(resolve, delay));
+              delay *= 2;
+            }
+          }
+        }
+
+        setAiResponse(responseText);
+        setAiLoading(false);
+      };
+
+      return (
+        <div className="flex-grow flex flex-col">
+          <header className="bg-stone-900 text-stone-100 py-3 px-4 no-print shadow-md">
+            <div className="max-w-md mx-auto flex justify-between items-center">
+              <div>
+                <h1 className="text-xs font-bold tracking-tight text-white uppercase">Rough Bill</h1>
+                <p className="text-[8px] text-stone-400 font-mono">Mobile Engine Workspace</p>
+              </div>
+              <div className="flex gap-1 bg-stone-800 rounded-lg p-0.5 border border-stone-700">
+                <button onClick={() => { setCurrentTab("bill"); setIsBillGenerated(false); }} className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${currentTab === "bill" ? "bg-white text-stone-900 shadow" : "text-stone-300"}`}>Billing</button>
+                <button onClick={() => setCurrentTab("products")} className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${currentTab === "products" ? "bg-white text-stone-900 shadow" : "text-stone-300"}`}>Catalog</button>
+                <button onClick={() => setCurrentTab("logs")} className={`px-2 py-1 rounded text-[10px] font-semibold transition-all ${currentTab === "logs" ? "bg-white text-stone-900 shadow" : "text-stone-300"}`}>b</button>
+              </div>
+            </div>
+          </header>
+
+          {notification && (
+            <div className="bg-stone-800 text-stone-100 py-1.5 px-3 text-center text-xs border-b border-stone-700 animate-pulse no-print">
+              <i className="fa-solid fa-circle-info text-amber-400 mr-1"></i> {notification}
+            </div>
+          )}
+
+          {}
+          <main className="flex-grow max-w-md w-full mx-auto p-3 flex flex-col gap-3">
+            {currentTab === "bill" && (
+              <div className="flex flex-col gap-3">
+                {editingBillId && (
+                  <div className="flex justify-between items-center bg-amber-50 border border-amber-200 rounded-lg p-1.5 text-xs text-amber-800 no-print">
+                    <span className="font-semibold flex items-center gap-1"><i className="fa-solid fa-pen-to-square"></i> Live Editing Mode</span>
+                    <button onClick={handleResetAll} className="px-2 py-0.5 bg-white border border-amber-300 rounded font-bold text-amber-900 text-[9px]">Cancel</button>
+                  </div>
+                )}
+
+                <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm space-y-3 no-print">
+                  
+                  {/* Customer search details + Discount x percentage in 1 row */}
+                  <div className="grid grid-cols-12 gap-2">
+                    <div className="col-span-6 relative" ref={custRef}>
+                      <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Search Customer</label>
+                      <input 
+                        type="text" 
+                        placeholder="Customer Name..."
+                        value={customerName}
+                        onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
+                        onFocus={() => setShowCustSuggestions(true)}
+                        onBlur={handleCustomerBlur}
+                        className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded focus:border-stone-500 transition-all font-semibold"
+                      />
+                      {showCustSuggestions && dbCustomers.length > 0 && (
+                        <div className="absolute left-0 right-0 mt-1 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded shadow-lg z-50 divide-y divide-stone-50 custom-scroll">
+                          {dbCustomers.filter(c => c.name.toLowerCase().includes(customerName.toLowerCase())).map((c, i) => (
+                            <div key={i} onMouseDown={() => { setCustomerName(c.name); setCustomerCity(c.city); setShowCustSuggestions(false); syncCustomerProfile(c.name, c.city); }} className="px-2 py-1 text-xs hover:bg-stone-50 cursor-pointer flex justify-between items-center">
+                              <span className="font-semibold text-stone-800">{c.name}</span>
+                              {c.city && <span className="text-[8px] bg-stone-100 text-stone-600 px-1 rounded font-mono">{c.city}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Small discount % field directly next to customer input */}
+                    <div className="col-span-3">
+                      <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">%x (0-99)</label>
+                      <input 
+                        type="number" 
+                        min="0" max="99"
+                        placeholder="0"
+                        value={discountX}
+                        onChange={(e) => setDiscountX(e.target.value)}
+                        className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded text-center font-mono font-bold focus:border-stone-500"
+                      />
+                    </div>
+
+                    <div className="col-span-3">
+                      <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Date</label>
+                      <input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} className="w-full px-1.5 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-mono" />
+                    </div>
+                  </div>
+
+                  {/* New Customer Prompt Flow */}
+                  {pendingDiscountPrompt && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-900 space-y-1.5 animate-fadeIn">
+                      <div className="font-semibold text-amber-800 flex items-center gap-1">
+                        <i className="fa-solid fa-user-plus text-xs"></i> New Customer Found
+                      </div>
+                      <p className="text-[10px] text-amber-700">Type default Discount rate (%) to link with their profile:</p>
+                      <div className="flex gap-1.5">
+                        <input 
+                          type="number" 
+                          id="new-customer-x" 
+                          placeholder="e.g. 15" 
+                          className="w-20 px-2 py-0.5 border bg-white rounded text-xs font-mono font-bold"
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleSaveNewCustomerDiscount(e.target.value); }}
+                        />
+                        <button 
+                          type="button" 
+                          onClick={() => {
+                            const val = document.getElementById('new-customer-x')?.value;
+                            handleSaveNewCustomerDiscount(val);
+                          }} 
+                          className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded text-[10px]"
+                        >
+                          Confirm & Save
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Toggle Mode Button: Standard vs Method 2 (Bulk) */}
+                  <div className="pt-0.5">
+                    <button 
+                      type="button" 
+                      onClick={() => setShowBulkMode(!showBulkMode)} 
+                      className="text-[9px] text-stone-500 font-bold uppercase tracking-wider underline flex items-center gap-1 hover:text-stone-800"
+                    >
+                      <i className={`fa-solid ${showBulkMode ? 'fa-keyboard' : 'fa-list-check'}`}></i> 
+                      {showBulkMode ? "Switch to Standard Single Mode" : "Switch to Method 2: Bulk Entry Stream"}
+                    </button>
+                  </div>
+
+                  {showBulkMode ? (
+                    <div className="border border-dashed border-stone-300 p-2.5 rounded bg-stone-50 space-y-2 animate-fadeIn">
+                      <div>
+                        <div className="flex justify-between items-center mb-0.5">
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide">Bulk Entry Text Area</label>
+                          <span className="text-[8px] text-stone-400 italic">Retained until generated</span>
+                        </div>
+                        <textarea 
+                          rows="3"
+                          value={bulkInput}
+                          onChange={(e) => setBulkInput(e.target.value)}
+                          placeholder="Example stream format:&#10;12 Shagun+gaana 5.2n 3 Tray+kalgi 120 1 sehra 122l"
+                          className="w-full p-1.5 text-xs border bg-white rounded font-mono custom-scroll focus:outline-none"
+                        />
+                      </div>
+                      <button 
+                        type="button" 
+                        onClick={processBulkAdd}
+                        className="w-full py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded transition-all"
+                      >
+                        Process & Add Bulk Products
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Qty and Product Selection in 1 Line */}
+                      <div className="grid grid-cols-12 gap-2">
+                        <div className="col-span-3">
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Qty</label>
+                          <input type="number" min="1" placeholder="1" value={qty} onChange={(e) => setQty(e.target.value)} onFocus={() => setQty("")} onBlur={() => { if (!qty.trim()) setQty("1"); }} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-mono font-bold" />
+                        </div>
+
+                        <div className="col-span-9 relative" ref={prodRef}>
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Product Selection Directory</label>
+                          <input type="text" placeholder="Type Product Name..." value={productSearch} onChange={(e) => { setProductSearch(e.target.value); setShowProdSuggestions(true); }} onFocus={() => { setShowProdSuggestions(true); }} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-semibold" />
+                          {showProdSuggestions && (
+                            <div className="absolute left-0 right-0 mt-1 max-h-48 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 custom-scroll">
+                              {filteredProductsForBilling(productSearch).length > 0 ? (
+                                filteredProductsForBilling(productSearch).map((p) => (
+                                  <div key={p.id} onMouseDown={() => { setSelectedProduct(p); setProductSearch(p.name); setShowProdSuggestions(false); document.getElementById("code-input")?.focus(); }} className="px-4 py-1.5 hover:bg-stone-50 cursor-pointer flex justify-between items-center text-xs font-semibold text-stone-700">
+                                    <span>{p.name}</span>
+                                    <span className="text-[8px] bg-stone-100 px-1 rounded text-stone-400">{p.category || "General"}</span>
+                                  </div>
+                                ))
+                              ) : (<div className="px-3 py-2 text-[10px] text-stone-400 italic">Unrecognized. Typing name will add automatically on submit.</div>)}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Code Structure</label>
+                          <input type="text" id="code-input" placeholder="e.g. 122" value={code} onChange={(e) => handleCodeChange(e.target.value)} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-mono" />
+                        </div>
+                        <div>
+                          <label className="block text-[8px] font-bold text-stone-400 uppercase tracking-wide mb-0.5">Computed Rate (Editable)</label>
+                          <input type="number" step="any" placeholder="0.00" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded font-mono focus:border-stone-500" />
+                        </div>
+                      </div>
+
+                      <div className="flex justify-center pt-1 border-t border-stone-100">
+                        <button type="button" onClick={handleAddItem} className="h-9 w-11 border-2 border-stone-900 hover:bg-stone-100 text-stone-900 rounded-lg flex items-center justify-center shadow-xs transition-all">
+                          <i className="fa-solid fa-plus text-xs"></i>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Staging Interface */}
+                {addedItems.length > 0 && (
+                  <div className="bg-white rounded-xl border border-stone-200 p-2.5 shadow-xs no-print">
+                    <h3 className="text-[9px] font-bold uppercase text-stone-400 mb-1.5 tracking-wider">Staged Items Pool</h3>
+                    <div className="space-y-1 max-h-48 overflow-y-auto custom-scroll">
+                      {addedItems.map((item) => (
+                        <div key={item.id} className="flex justify-between items-center text-xs bg-stone-50 p-2 rounded border border-stone-100">
+                          <div className="font-semibold text-stone-800 flex-1">
+                            {item.qty} × {item.name} {item.code !== "—" && <span className="font-mono text-[9px] text-stone-500">[{item.code}]</span>}
+                            {item.isOverride && <span className="text-[8px] text-amber-600 font-bold block">⚠️ Overridden (Bold)</span>}
+                          </div>
+                          
+                          <div className="flex items-center gap-3">
+                            <span className="font-mono text-stone-700 font-bold">₹{item.totalAmount.toFixed(2)}</span>
+                            
+                            {/* Edit Action - Redirects directly to Single Mode */}
+                            <button 
+                              onClick={() => {
+                                setQty(String(item.qty));
+                                setProductSearch(item.name);
+                                setCode(item.code === "—" ? "" : item.code);
+                                setPrice(String(item.basePrice));
+                                setSelectedProduct({ name: item.name, category: item.category });
+                                setAddedItems(prev => prev.filter(i => i.id !== item.id));
+                                setShowBulkMode(false); // Force switch standard single mode for editing
+                              }} 
+                              className="text-stone-400 hover:text-stone-700 transition-colors" 
+                              title="Edit item parameters"
+                            >
+                              <i className="fa-solid fa-pen text-[10px]"></i>
+                            </button>
+                            <button 
+                              onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} 
+                              className="text-stone-300 hover:text-rose-600 transition-colors"
+                            >
+                              <i className="fa-solid fa-trash-can text-[10px]"></i>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="no-print">
+                  <button onClick={handleGenerateClick} disabled={addedItems.length === 0} className="w-full py-2.5 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 text-white font-bold rounded-xl text-xs tracking-wider transition-all shadow-sm">
+                    Generate & Save Receipt File
+                  </button>
+                </div>
+
+                {}
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between no-print bg-white p-2.5 rounded-xl border border-stone-200 shadow-xs">
+                    <span className="text-[9px] font-bold text-stone-400 uppercase tracking-widest">Document Frame Preview</span>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => {
+                        let msg = `*Estimate Receipt*\nDate: ${billDate}\nCustomer: *${customerName.trim() || "Cash"}*\n----------------------------------\n`;
+                        generatedItems.forEach(i => {
+                          msg += `• Qty: ${i.qty} | ${i.name} | Code: ${i.code} | Price: ₹${i.finalUnitPrice.toFixed(2)} | Amt: ₹${i.totalAmount.toFixed(2)}\n`;
+                        });
+                        msg += `----------------------------------\n*Total: ₹${generatedItems.reduce((s, i) => s + i.totalAmount, 0).toFixed(2)}*\n_Rough Bill Engine_`;
+                        window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(msg)}`, '_blank');
+                      }} disabled={!isBillGenerated} className="px-2 py-1 bg-emerald-600 text-white rounded text-[10px] font-semibold"><i className="fa-brands fa-whatsapp text-xs"></i> Share</button>
+                      <button onClick={() => window.print()} disabled={!isBillGenerated} className="px-2 py-1 bg-stone-800 text-white rounded text-[10px] font-semibold">Print Engine</button>
+                    </div>
+                  </div>
+
+                  {/* Built-in Printer Connector Helper Box */}
+                  <div className="bg-stone-100 p-2 rounded-lg border text-[10px] space-y-1.5 no-print">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-stone-700"><i className="fa-solid fa-print"></i> Printer Integration (WebUSB 58mm)</span>
+                      <span className={`px-1 rounded text-[8px] font-bold ${printerStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800':'bg-amber-100 text-amber-800'}`}>{printerStatus}</span>
+                    </div>
+                    <p className="text-stone-500 text-[8px]">Seznik Veer 2-inch Bluetooth/USB receipt printer configuration activated. Mount device via USB-OTG line to direct-print.</p>
+                    <button onClick={connectWebUsbPrinter} className="bg-white border text-[9px] font-bold px-2 py-0.5 rounded shadow-xs hover:bg-stone-50">Connect Seznik Printer</button>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden min-h-[250px] relative">
+                    {!isBillGenerated && (
+                      <div className="absolute inset-0 bg-stone-50/90 flex flex-col items-center justify-center text-center p-4 no-print">
+                        <i className="fa-solid fa-calculator text-stone-300 text-lg mb-1"></i>
+                        <h3 className="text-xs font-bold text-stone-700">Preview Engine Standby</h3>
+                      </div>
+                    )}
+                    <div id="printable-bill-invoice" className="p-4 text-stone-900 font-mono text-xs">
+                      <div className="text-center border-b border-dashed border-stone-300 pb-2">
+                        <h2 className="text-xs font-bold uppercase tracking-wider">Estimate Receipt</h2>
+                        <p className="text-[8px] text-stone-500">Rough Statement Profile</p>
+                        
+                        {/* Coded short customer & city name header */}
+                        <div className="mt-2 text-center text-[10px] font-bold text-stone-800">
+                          {getThreeLetterCode(customerName.trim() || "Cash")} ({getThreeLetterCode(customerCity)}) - {billDate}
+                        </div>
+                      </div>
+                      
+                      <table className="w-full text-left mt-2">
+                        <thead>
+                          <tr className="border-b border-stone-200 text-[8px] font-bold text-stone-500 uppercase">
+                            <th className="py-1 w-6 text-center">Qty</th>
+                            <th className="py-1">Item Specifications</th>
+                            <th className="py-1 w-10 text-center">Code</th>
+                            <th className="py-1 text-right w-14">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-stone-100">
+                          {generatedItems.map((item, idx) => (
+                            <tr key={idx} className="align-top text-[9px]">
+                              <td className="py-1 text-center text-stone-600">{item.qty}</td>
+                              <td className="py-1 font-bold text-stone-900">{item.name}</td>
+                              <td className="py-1 text-center text-stone-400 font-mono">{item.code}</td>
+                              {/* Override prices rendered in BOLD on the receipt */}
+                              <td className={`py-1 text-right font-mono ${item.isOverride ? 'font-extrabold text-stone-950 text-xs' : 'text-stone-900'}`}>
+                                ₹{item.totalAmount.toFixed(2)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="mt-3 pt-2 border-t border-dashed border-stone-300 text-right space-y-1 text-[9px]">
+                        <div className="flex justify-between text-stone-500"><span>Gross Aggregation:</span><span>₹{generatedItems.reduce((acc, i) => acc + i.totalAmount, 0).toFixed(2)}</span></div>
+                        <div className="flex justify-between text-xs font-bold text-stone-900 border-t pt-1"><span>Net Liability:</span><span>₹{generatedItems.reduce((acc, i) => acc + i.totalAmount, 0).toFixed(2)}</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {currentTab === "products" && (
+              <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-3.5 space-y-4">
+                <div>
+                  <h2 className="text-sm font-bold text-stone-900 flex items-center gap-1"><i className="fa-solid fa-box text-stone-500"></i> Catalog Registry Matrix</h2>
+                </div>
+                
+                {/* Product Entry Form */}
+                <form onSubmit={handleProductAddSubmit} className="space-y-2 bg-stone-50 p-2.5 rounded-lg border border-stone-200">
+                  <input type="text" required placeholder="Product Identification Name..." value={newProdName} onChange={(e) => setNewProdNameState(e.target.value)} className="w-full px-2 py-1 text-xs border bg-white rounded font-semibold" />
+                  <input type="text" placeholder="Category Type..." value={newProdCategory} onChange={(e) => setNewProdCategory(e.target.value)} className="w-full px-2 py-1 text-xs border bg-white rounded font-semibold" />
+                  <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Commit Entry to Database</button>
+                </form>
+
+                {/* Direct Product Merging Option */}
+                <div className="bg-stone-50 p-2.5 rounded-lg border border-stone-200 space-y-2">
+                  <h3 className="text-[10px] font-bold uppercase text-stone-400">Merge Products</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input type="text" placeholder="Source (Incorrect)" value={mergeSource} onChange={(e) => setMergeSource(e.target.value)} className="px-2 py-1 text-[10px] border bg-white rounded" />
+                    <input type="text" placeholder="Target (Correct)" value={mergeTarget} onChange={(e) => setMergeTarget(e.target.value)} className="px-2 py-1 text-[10px] border bg-white rounded" />
+                  </div>
+                  <button type="button" onClick={handleProductMerge} className="w-full py-1 bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold rounded">Perform Merge</button>
+                </div>
+
+                <input type="text" placeholder="Filter active local matrix directory..." value={productFilterQuery} onChange={(e) => setProductFilterQuery(e.target.value)} className="w-full px-2 py-1 text-xs bg-stone-50 border border-stone-200 rounded mb-2 font-semibold" />
+                
+                {/* Lists catalog organized in ascending order of categories first, then product name */}
+                <div className="border rounded divide-y max-h-48 overflow-y-auto custom-scroll">
+                  {getSortedProducts().filter(p => p.name.toLowerCase().includes(productFilterQuery.toLowerCase())).map(p => (
+                    <div key={p.id} className="flex justify-between items-center p-2 text-xs">
+                      <div>
+                        <span className="font-semibold text-stone-800">{p.name}</span>
+                        <span className="text-[8px] bg-stone-100 text-stone-500 px-1 ml-2 rounded">{p.category || "General"}</span>
+                      </div>
+                      <button onClick={() => handleProductDelete(p.id)} className="text-stone-300 hover:text-rose-600"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {}
+            {currentTab === "logs" && (
+              <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-3.5 space-y-3">
+                <div className="mb-2">
+                  <h2 className="text-sm font-bold text-stone-900 flex items-center gap-1"><i className="fa-solid fa-history text-stone-500"></i> Protected Historic Index</h2>
+                </div>
+
+                {!isVerified ? (
+                  // Completely empty screen without any guidance text except a single blank line-input field
+                  <div className="flex flex-col items-center justify-center min-h-[300px]">
+                    <input 
+                      type="password" 
+                      value={passwordInput} 
+                      onChange={e => handleTabVerificationInput(e.target.value)}
+                      className="w-16 text-center border-b border-stone-200 focus:border-stone-500 outline-none py-1 text-sm bg-transparent font-mono"
+                      autoFocus
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Access Header block */}
+                    <div className="flex justify-between items-center pb-2 border-b">
+                      <span className="text-[10px] text-emerald-700 font-bold uppercase"><i className="fa-solid fa-shield-halved"></i> Access Approved</span>
+                      <button onClick={() => { setIsVerified(false); setPasswordInput(""); }} className="text-[9px] text-stone-400 underline">Lock Index</button>
+                    </div>
+
+                    {/* Sub navigation inside B tab */}
+                    <div className="flex bg-stone-100 p-0.5 rounded-lg border gap-0.5">
+                      <button onClick={() => setLogsSubTab("list")} className={`flex-1 py-1 text-[10px] font-bold rounded ${logsSubTab === 'list' ? 'bg-white text-stone-900 shadow':'text-stone-500'}`}>Bill Logs</button>
+                      <button onClick={() => setLogsSubTab("metrics")} className={`flex-1 py-1 text-[10px] font-bold rounded ${logsSubTab === 'metrics' ? 'bg-white text-stone-900 shadow':'text-stone-500'}`}>Metrics Dashboard</button>
+                      <button onClick={() => setLogsSubTab("ai")} className={`flex-1 py-1 text-[10px] font-bold rounded ${logsSubTab === 'ai' ? 'bg-white text-stone-900 shadow':'text-stone-500'}`}>AI Consultant</button>
+                    </div>
+
+                    {/* Sub-tab 1: Invoices List with Delete confirmation */}
+                    {logsSubTab === "list" && (
+                      <div className="space-y-2 max-h-96 overflow-y-auto custom-scroll">
+                        {cloudBills.map((b) => (
+                          <div key={b.id} className="border border-stone-100 rounded p-2.5 hover:bg-stone-50 text-xs space-y-1">
+                            <div className="flex justify-between font-semibold">
+                              <span>{b.customerName}</span>
+                              <span className="font-mono font-bold">₹{parseFloat(b.totalAmount || 0).toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-[9px] text-stone-400 items-center">
+                              <span>Date: {b.date}</span>
+                              <div className="flex gap-1">
+                                <button onClick={() => handleLoadHistoricalBill(b)} className="px-2 py-0.5 bg-stone-900 text-white rounded text-[9px]">Load</button>
+                                <button onClick={() => setBillToDelete(b)} className="px-2 py-0.5 bg-rose-50 border border-rose-200 text-rose-600 rounded text-[9px] hover:bg-rose-100">Delete</button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Sub-tab 2: Dynamic Custom Metrics Panel */}
+                    {logsSubTab === "metrics" && (
+                      <div className="space-y-3 animate-fadeIn">
+                        {/* Custom date range controls */}
+                        <div className="space-y-1">
+                          <span className="text-[8px] font-bold text-stone-400 uppercase tracking-wide">Select Timeline Boundary</span>
+                          <div className="grid grid-cols-5 gap-1">
+                            {["7", "14", "30", "90", "all"].map(r => (
+                              <button key={r} onClick={() => setMetricsRange(r)} className={`py-1 text-[10px] font-bold rounded border ${metricsRange === r ? 'bg-stone-900 text-white border-stone-900' : 'bg-stone-50 text-stone-600 border-stone-200'}`}>
+                                {r === 'all' ? 'All' : `${r}D`}
+                              </button>
+                            ))}
+                          </div>
+                          <button onClick={() => setMetricsRange("custom")} className={`w-full py-1 mt-1 text-[10px] font-bold rounded border ${metricsRange === 'custom' ? 'bg-stone-900 text-white border-stone-900' : 'bg-stone-50 text-stone-600 border-stone-200'}`}>
+                            Custom Random Range...
+                          </button>
+
+                          {metricsRange === "custom" && (
+                            <div className="grid grid-cols-2 gap-2 p-2 bg-stone-50 border rounded-lg mt-1.5 animate-fadeIn">
+                              <div>
+                                <label className="block text-[8px] font-mono text-stone-400">START DATE</label>
+                                <input type="date" value={customStartDate} onChange={e => setCustomStartDate(e.target.value)} className="w-full p-1 text-[10px] border rounded" />
+                              </div>
+                              <div>
+                                <label className="block text-[8px] font-mono text-stone-400">END DATE</label>
+                                <input type="date" value={customEndDate} onChange={e => setCustomEndDate(e.target.value)} className="w-full p-1 text-[10px] border rounded" />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Calculations Overview Grid */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Total Revenue</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">₹{activeMetrics.totalRevenue.toFixed(2)}</span>
+                          </div>
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Bills Issued</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">{activeMetrics.invoiceCount}</span>
+                          </div>
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Avg Bill Value</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">₹{activeMetrics.averageBill.toFixed(2)}</span>
+                          </div>
+                          <div className="p-2 bg-stone-50 rounded border border-stone-100">
+                            <span className="text-[8px] text-stone-400 font-bold block uppercase">Total Units Sold</span>
+                            <span className="text-xs font-bold text-stone-800 font-mono">{activeMetrics.totalItemsSold} qty</span>
+                          </div>
+                        </div>
+
+                        {/* Selling diagnostics summary */}
+                        <div className="p-2.5 bg-stone-50 border rounded-lg space-y-1.5">
+                          <span className="text-[9px] font-bold text-stone-400 uppercase block tracking-wider"><i className="fa-solid fa-chart-line"></i> Performance Analysis</span>
+                          
+                          <div className="divide-y divide-stone-100 text-[10px]">
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Product (by Qty):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topProductQty[0]} <span className="text-stone-400 font-normal">({activeMetrics.topProductQty[1]} sold)</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Product (by Amount):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topProductRev[0]} <span className="text-stone-400 font-normal">(₹{activeMetrics.topProductRev[1].toFixed(0)})</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Category (by Qty):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topCategoryQty[0]} <span className="text-stone-400 font-normal">({activeMetrics.topCategoryQty[1]} sold)</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Top Category (by Amount):</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.topCategoryRev[0]} <span className="text-stone-400 font-normal">(₹{activeMetrics.topCategoryRev[1].toFixed(0)})</span></span>
+                            </div>
+                            <div className="flex justify-between py-1">
+                              <span className="text-stone-500">Highest Bill Invoiced:</span>
+                              <span className="font-bold text-stone-800">{activeMetrics.highestBill.customer} <span className="text-stone-400 font-normal">(₹{activeMetrics.highestBill.amount.toFixed(0)})</span></span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sub-tab 3: AI diagnostics Consultant */}
+                    {logsSubTab === "ai" && (
+                      <div className="space-y-3 animate-fadeIn">
+                        <div className="p-2 bg-stone-50 border rounded text-[9px] text-stone-500 leading-relaxed">
+                          <i className="fa-solid fa-robot"></i> Ask questions like: *"Which categories are most popular?"*, *"Who are our biggest clients?"*, or *"Which item sold best?"*.
+                        </div>
+
+                        <div className="flex gap-1.5">
+                          <input 
+                            type="text" 
+                            placeholder="Ask any store analytics query..." 
+                            value={aiQuery} 
+                            onChange={e => setAiQuery(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleAskAiAdvisor(); }}
+                            className="flex-grow px-2 py-1.5 text-xs border rounded bg-stone-50 font-semibold focus:outline-none"
+                          />
+                          <button 
+                            type="button" 
+                            onClick={handleAskAiAdvisor}
+                            disabled={aiLoading}
+                            className="bg-stone-900 text-white font-bold text-xs px-3 rounded flex items-center justify-center min-w-[50px]"
+                          >
+                            {aiLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : "Query"}
+                          </button>
+                        </div>
+
+                        {aiResponse && (
+                          <div className="p-3 border rounded bg-stone-50 text-xs space-y-1 text-stone-800 max-h-56 overflow-y-auto custom-scroll leading-relaxed">
+                            <span className="text-[8px] font-bold text-stone-400 uppercase tracking-widest block">AI Consultant Output</span>
+                            <div className="font-sans whitespace-pre-wrap">{aiResponse}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </div>
+            )}
+          </main>
+
+          {}
+          {/* Delete Bill Confirmation Modal */}
+          {billToDelete && (
+            <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50 no-print animate-fadeIn">
+              <div className="bg-white rounded-xl border p-4 max-w-xs w-full space-y-3 shadow-xl">
+                <div className="text-amber-600 text-lg"><i className="fa-solid fa-triangle-exclamation"></i> Danger Action</div>
+                <h3 className="text-xs font-bold text-stone-800">Are you sure you want to delete this bill?</h3>
+                <p className="text-[10px] text-stone-500">This action will permanently delete the invoice log for "{billToDelete.customerName}" amounting to ₹{parseFloat(billToDelete.totalAmount || 0).toFixed(2)} from Cloud.</p>
+                <div className="flex gap-1.5 justify-end">
+                  <button onClick={() => setBillToDelete(null)} className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 border rounded text-[10px] font-bold">Cancel</button>
+                  <button onClick={handleConfirmDeleteBill} className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10px] font-bold">Confirm Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
