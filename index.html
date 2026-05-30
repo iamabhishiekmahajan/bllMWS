@@ -45,7 +45,7 @@
       display: none;
     }
 
-    /* Absolute 58mm Continuous End-to-End Thermal Printing Fixes with Paper Saving */
+    /* Absolute 58mm Continuous End-to-End Thermal Printing Fixes */
     @media print {
       @page {
         size: 58mm auto;
@@ -79,7 +79,7 @@
         height: auto !important;
         overflow: visible !important;
         margin: 0 auto !important;
-        padding: 1mm 0.5mm 2mm 0.5mm !important; /* Minimal bottom padding to save paper */
+        padding: 1mm 0.5mm !important;
         box-sizing: border-box !important;
       }
       header, footer, .no-print, .tabs-container {
@@ -102,7 +102,7 @@
     }
   </style>
 </head>
-<body class="text-stone-900 font-sans antialiased selection:bg-stone-300">
+<body class="text-stone-900 font-sans antialiased selection:bg-stone-300 bg-stone-100">
 
   <div id="root" class="h-screen w-full flex flex-col overflow-hidden"></div>
 
@@ -242,6 +242,11 @@
       const [parserInput, setParserInput] = useState("");
       const [lastProductName, setLastProductName] = useState("");
       const [showManualInputs, setShowManualInputs] = useState(false);
+      const [showPreview, setShowPreview] = useState(false); // Collapsed by default
+
+      // Generate Status Indicator State (Idle, Saving, SavedFirestore, SavedSheets, Error)
+      // 0 = Idle, 1 = Saving, 2 = Saved Cloud (✓), 3 = Saved Sheets (✓✓), -1 = Error
+      const [saveStatus, setSaveStatus] = useState(0);
 
       // Add/Edit Catalog products
       const [newProdName, setNewProdNameState] = useState("");
@@ -529,6 +534,7 @@
 
         setAddedItems(prev => [...prev, itemObj]);
         setParserInput("");
+        setSaveStatus(0); // Reset save indicators upon altering content
         if (parserRef.current) {
           parserRef.current.focus();
         }
@@ -616,23 +622,22 @@
         setAddedItems(prev => [...prev, manualItem]);
         setProductSearch(""); setCode(""); setPrice(""); setLess(""); setQty("1");
         setShowManualInputs(false);
+        setSaveStatus(0);
         triggerNotification("Item added manual form!");
       };
 
       // Dynamic Checklist state moves item directly to "Bag Tab" WITHOUT tab switching
       const handleTalliedCheck = (stagedItem) => {
-        // Remove from Staged Pool (addedItems)
         setAddedItems(prev => prev.filter(i => i.id !== stagedItem.id));
-        // Add to Bag Array (baggedItems) with default 'less' matching client discount rate if code matched 'no' or 'nu'
         const bagObj = { ...stagedItem };
         setBaggedItems(prev => [...prev, bagObj]);
-
-        // Retains user in Tab 1, only triggers notification
+        setSaveStatus(0);
         triggerNotification(`Tallied "${stagedItem.name}" to Bag!`);
       };
 
       // Apply/Change Less percentage or flat rate modifications inside Tab 2 Bag list
       const handleUpdateLessInBag = (itemId, lessStr) => {
+        setSaveStatus(0);
         setBaggedItems(prev => prev.map(item => {
           if (item.id === itemId) {
             let deduction = 0;
@@ -640,14 +645,11 @@
             const numericDiscount = parseFloat(discountX) || 0;
 
             if (cleanLess.endsWith('%')) {
-              // Extract numeric percentage
               const pct = parseFloat(cleanLess.slice(0, -1)) || 0;
               deduction = item.basePrice * (pct / 100);
             } else if (cleanLess === 'x%' || cleanLess === 'x') {
-              // Applies client linked discount rate percentage (x)
               deduction = item.basePrice * (numericDiscount / 100);
             } else if (cleanLess !== "" && cleanLess !== "—") {
-              // Flat numeric rate subtraction
               deduction = parseFloat(cleanLess) || 0;
             }
 
@@ -669,6 +671,7 @@
         setQty("1"); setProductSearch(""); setSelectedProduct(null); setCode(""); setPrice(""); setLess("");
         setAddedItems([]); setBaggedItems([]); setGeneratedItems([]); setIsBillGenerated(false); setEditingBillId(null);
         setIsNewCustomer(false); setPendingDiscountPrompt(false); setParserInput("");
+        setSaveStatus(0);
       };
 
       // Automated Sales log synchronizer
@@ -694,7 +697,7 @@
         }
       };
 
-      // HIGH-DPI 300% SCALED STANDALONE CANVAS GENERATOR FOR CLIPBOARD COPY
+      // HIGH-DPI 300% SCALED STANDALONE CANVAS GENERATOR FOR CLIPBOARD COPY (Code drawn below item name, paper-saving)
       const copyReceiptImageDirectly = (itemsList, custName, cityVal, activeDate) => {
         const canvas = document.createElement("canvas");
         const ctx = canvas.getContext("2d");
@@ -706,7 +709,6 @@
         const headerHeight = 110;
         const footerHeight = 45; // Strictly minimal bottom padding to save paper
         
-        // Calculate the height needed dynamically based on items and whether they have code subtitles
         let dynamicItemsHeight = 0;
         itemsList.forEach(item => {
           dynamicItemsHeight += itemHeight;
@@ -796,7 +798,7 @@
           
           yPos += itemHeight;
           
-          // If code exists, write it directly below the item name
+          // If code exists, write it directly below the item name on separate line
           if (cleanCode) {
             ctx.font = "10px 'Courier Prime', monospace";
             ctx.textAlign = "left";
@@ -838,6 +840,7 @@
             if (navigator.clipboard && navigator.clipboard.write) {
               const clipboardItem = new ClipboardItem({ "image/png": blob });
               await navigator.clipboard.write([clipboardItem]);
+              triggerNotification("Clean 58mm image receipt copied!");
             }
           } catch (err) {
             console.warn("Clipboard background synchronization fail:", err);
@@ -845,8 +848,8 @@
         }, "image/png");
       };
 
-      // Perform clean submission output rendering, copy image instantly, and trigger printing automatically
-      const handleGenerateCleanBill = async () => {
+      // Perform clean database saving operations and progress ticks
+      const handleGenerateAndSaveBill = async () => {
         if (baggedItems.length === 0) {
           triggerNotification("Please tally and checklist staged items first!");
           return;
@@ -857,6 +860,7 @@
 
         setGeneratedItems(baggedItems);
         setIsBillGenerated(true);
+        setSaveStatus(1); // Set to "Saving" state
 
         const { db, appId, doc, setDoc } = window.firebaseBridge;
         if (db && finalClientName !== "Walk-In Customer") {
@@ -870,6 +874,8 @@
             }, { merge: true });
           } catch (e) {
             console.error("Client discount configuration update fail:", e);
+            setSaveStatus(-1); // Transition to Error
+            return;
           }
         }
 
@@ -878,8 +884,14 @@
 
         // Google Sheets Integration Pipeline: Only triggers logging if customerName is explicitly specified
         const cleanCustVal = customerName.trim();
+        let sheetsSucceeded = false;
         if (cleanCustVal) {
-          await saveLedgerTransactionToSheet(cleanCustVal, totalCalculatedBill);
+          try {
+            await saveLedgerTransactionToSheet(cleanCustVal, totalCalculatedBill);
+            sheetsSucceeded = true;
+          } catch (err) {
+            console.warn("Sheets logging bypassed or failed.", err);
+          }
         }
 
         if (db && window.firebaseBridge.connected) {
@@ -899,24 +911,36 @@
               const docRef = await window.firebaseBridge.saveBillToCloud(rawBillObj);
               if (docRef?.id) setEditingBillId(docRef.id);
             }
+            
+            // Success State Toggles: 2 = Cloud Saved (✓), 3 = Cloud + Sheets Saved (✓✓)
+            if (cleanCustVal && sheetsSucceeded) {
+              setSaveStatus(3); // ✓✓ Saved to Sheet
+            } else {
+              setSaveStatus(2); // ✓ Saved to Cloud
+            }
+            triggerNotification("Receipt manifest saved successfully!");
           } catch (err) {
             console.error("Database storage exception:", err);
+            setSaveStatus(-1); // Transition to Error
           }
+        } else {
+          setSaveStatus(-1);
         }
+      };
 
-        // Automatic actions: Compile, copy 300%-scaled PNG receipt directly to clipboard
+      // Traditional standard trigger for clipboard copy
+      const triggerClipboardImageCopy = () => {
+        if (baggedItems.length === 0) {
+          triggerNotification("Please tally items to Bag first!");
+          return;
+        }
+        const finalClientName = customerName.trim() || "Walk-In Customer";
         try {
           copyReceiptImageDirectly(baggedItems, finalClientName, customerCity, billDate);
-          triggerNotification("Bill generated, copied image, opening print window...");
-        } catch (copyErr) {
-          console.error("Direct copying error:", copyErr);
-          triggerNotification("Saved! Opening print window...");
+        } catch (e) {
+          console.error(e);
+          triggerNotification("Could not copy clipboard receipt image.");
         }
-
-        // Combined Button Action: Automatically trigger system printing layout immediately
-        setTimeout(() => {
-          window.print();
-        }, 400);
       };
 
       const handleQuickSuggestionClick = (prod) => {
@@ -1136,11 +1160,31 @@
         }
       };
 
+      const saveLedgerTransactionToSheet = async (clientName, invoiceAmount) => {
+        const sheetsScriptUrl = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
+        try {
+          const finalCleanAmount = parseFloat(invoiceAmount).toFixed(2);
+          await fetch(`${sheetsScriptUrl}?action=addTransaction&name=${encodeURIComponent(clientName)}&amount=${finalCleanAmount}&date=${billDate}&type=bill`, {
+            method: "GET",
+            mode: "no-cors"
+          });
+        } catch (sheetsErr) {
+          console.warn("Sheets API offline or unmapped:", sheetsErr);
+          throw sheetsErr; // Propagate up to update Status Indicator correctly
+        }
+      };
+
       const parserAutocompleteQuery = getParserAutocompleteQuery();
       const parserSuggestions = parserAutocompleteQuery ? filteredProductsForBilling(parserAutocompleteQuery) : [];
 
       // DYNAMIC CALCULATION STOPS WHITE-SCREEN REFERENCE ERRORS
       const grossCalculatedSum = baggedItems.reduce((acc, i) => acc + (i.totalAmount || 0), 0);
+
+      // PASSWORD-FREE LAST 2 LOGS FILTER METHOD
+      const getFilteredLogBills = () => {
+        if (isVerified) return cloudBills;
+        return cloudBills.slice(0, 2); // Show last 2 logs without access code
+      };
 
       return (
         <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative">
@@ -1152,7 +1196,7 @@
                 <h1 className="text-sm font-bold tracking-tight text-white uppercase flex items-center gap-1.5 font-sans">
                   <i className="fa-solid fa-receipt text-amber-500"></i> Rough Bill Studio
                 </h1>
-                <p className="text-[9px] text-stone-400 font-mono leading-none font-sans">Continuous Terminal Control</p>
+                <p className="text-[9px] text-stone-400 font-mono leading-none font-sans font-semibold">Continuous Terminal Control</p>
               </div>
             </div>
           </header>
@@ -1163,8 +1207,8 @@
             </div>
           )}
 
-          {/* Primary Mobile Workspace Frame (Non-Scrollable Layout) */}
-          <main className="flex-grow max-w-md w-full mx-auto p-2 flex flex-col gap-2 overflow-hidden bg-stone-50 no-print">
+          {/* Primary Mobile Workspace Frame with strict height limits to prevent footer overflow */}
+          <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2 flex flex-col gap-2 bg-stone-50 no-print">
             
             {/* Tab 1: New Bill */}
             {currentTab === "bill" && (
@@ -1181,7 +1225,7 @@
                   )}
 
                   {/* Customer and Discount Configuration Card */}
-                  <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm space-y-2.5 no-print">
+                  <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm space-y-2.5 no-print font-sans">
                     <div className="grid grid-cols-12 gap-2">
                       <div className="col-span-6 relative" ref={custRef}>
                         <label className="block text-[9px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans">Customer Name (Optional)</label>
@@ -1207,7 +1251,7 @@
                       </div>
 
                       <div className="col-span-3">
-                        <label className="block text-[9px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans">%x (Discount)</label>
+                        <label className="block text-[9px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans">x Discount (%)</label>
                         <input 
                           type="number" 
                           min="0" max="99"
@@ -1219,7 +1263,7 @@
                       </div>
 
                       <div className="col-span-3">
-                        <label className="block text-[9px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans">Date</label>
+                        <label className="block text-[9px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans font-sans">Date</label>
                         <input type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)} className="w-full px-2 py-2 text-xs bg-stone-50 border border-stone-200 rounded-lg font-mono font-semibold" />
                       </div>
                     </div>
@@ -1245,7 +1289,7 @@
                               const val = document.getElementById('new-customer-x')?.value;
                               handleSaveNewCustomerDiscount(val);
                             }} 
-                            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs font-sans"
+                            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs font-sans font-semibold"
                           >
                             Save Client
                           </button>
@@ -1255,7 +1299,7 @@
                   </div>
 
                   {/* Top 20 Scrollable Suggestions Matrix */}
-                  <div className="bg-white p-2.5 rounded-xl border border-stone-200 shadow-sm no-print space-y-1.5">
+                  <div className="bg-white p-2.5 rounded-xl border border-stone-200 shadow-sm no-print space-y-1.5 font-sans">
                     <span className="block text-[9px] font-extrabold text-stone-400 uppercase tracking-wider font-sans">Top 20 Suggestions shortcuts</span>
                     <div className="flex gap-1.5 overflow-x-auto pb-1 custom-scroll">
                       {getTopTwentyProducts().length > 0 ? (
@@ -1277,7 +1321,7 @@
 
                   {/* Core Parser Command Line */}
                   <div className="bg-white p-3 rounded-xl border-2 border-stone-300 shadow-sm space-y-2.5 no-print relative">
-                    <div className="flex justify-between items-center">
+                    <div className="flex justify-between items-center font-sans">
                       <span className="block text-[10px] font-extrabold text-stone-400 uppercase tracking-wider font-sans font-semibold">Fast Command Input Parser</span>
                       <button 
                         type="button" 
@@ -1295,7 +1339,7 @@
                         placeholder={lastProductName ? `Next fallback name: [ ${lastProductName} ]` : "Format: [Qty] [Name] [Code] (e.g. 12 sehra 20n)"}
                         value={parserInput}
                         onChange={(e) => setParserInput(e.target.value)}
-                        className="w-full px-3 py-2.5 text-sm bg-stone-50 border-2 border-stone-300 rounded-lg font-mono font-bold focus:border-stone-800 focus:outline-none"
+                        className="w-full px-3 py-2.5 text-sm bg-stone-50 border-2 border-stone-300 rounded-lg font-mono font-bold focus:border-stone-800 focus:outline-none animate-none"
                       />
                     </form>
 
@@ -1306,7 +1350,7 @@
                           <div 
                             key={p.id} 
                             onMouseDown={() => selectParserSuggestion(p.name)}
-                            className="px-3.5 py-2 text-xs font-bold text-stone-700 hover:bg-stone-100 cursor-pointer flex justify-between items-center font-sans"
+                            className="px-3.5 py-2 text-xs font-bold text-stone-700 hover:bg-stone-100 cursor-pointer flex justify-between items-center font-sans font-semibold"
                           >
                             <span>{p.name}</span>
                             <span className="text-[8px] bg-stone-100 px-1.5 py-0.5 rounded-full text-stone-500 font-mono">{p.category || "General"}</span>
@@ -1318,16 +1362,16 @@
 
                   {/* 2nd Method: Traditional form input */}
                   {showManualInputs && (
-                    <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm space-y-2.5 animate-fadeIn">
+                    <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm space-y-2.5 animate-fadeIn font-sans">
                       <div className="grid grid-cols-12 gap-2">
                         <div className="col-span-3">
                           <label className="block text-[8px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans font-semibold">Qty</label>
-                          <input type="number" min="1" placeholder="1" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full px-2 py-2 text-sm bg-stone-50 border border-stone-200 rounded-lg font-mono font-bold" />
+                          <input type="number" min="1" placeholder="1" value={qty} onChange={(e) => setQty(e.target.value)} className="w-full px-2 py-2 text-sm bg-stone-50 border border-stone-200 rounded-lg font-mono font-bold animate-none" />
                         </div>
 
                         <div className="col-span-9 relative" ref={prodRef}>
-                          <label className="block text-[8px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans font-semibold">Product Selection</label>
-                          <input type="text" placeholder="Type Product Name..." value={productSearch} onChange={(e) => { setProductSearch(e.target.value); setShowProdSuggestions(true); }} onFocus={() => { setShowProdSuggestions(true); }} className="w-full px-2.5 py-2 text-sm bg-stone-50 border border-stone-200 rounded-lg font-bold" />
+                          <label className="block text-[8px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans font-semibold font-semibold">Product Selection</label>
+                          <input type="text" placeholder="Type Product Name..." value={productSearch} onChange={(e) => { setProductSearch(e.target.value); setShowProdSuggestions(true); }} onFocus={() => { setShowProdSuggestions(true); }} className="w-full px-2.5 py-2 text-sm bg-stone-50 border border-stone-200 rounded-lg font-bold font-sans" />
                           {showProdSuggestions && (
                             <div className="absolute left-0 right-0 mt-1 max-h-40 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 custom-scroll">
                               {filteredProductsForBilling(productSearch).length > 0 ? (
@@ -1346,7 +1390,7 @@
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="block text-[8px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans font-semibold">Multiplier Code</label>
-                          <input type="text" placeholder="e.g. 20n" value={code} onChange={(e) => setCode(e.target.value)} className="w-full px-2 py-2 text-sm bg-stone-50 border border-stone-200 rounded-lg font-mono" />
+                          <input type="text" placeholder="e.g. 20n" value={code} onChange={(e) => setCode(e.target.value)} className="w-full px-2 py-2 text-sm bg-stone-50 border border-stone-200 rounded-lg font-mono animate-none" />
                         </div>
                         <div>
                           <label className="block text-[8px] font-extrabold text-stone-400 uppercase tracking-wide mb-0.5 font-sans font-semibold font-sans font-semibold">Computed Price (Rate)</label>
@@ -1362,12 +1406,12 @@
 
                   {/* Staged Items Pool Below the Parser with Checklist */}
                   {addedItems.length > 0 && (
-                    <div className="bg-white rounded-xl border border-stone-200 p-3 shadow-xs no-print">
-                      <h3 className="text-[10px] font-extrabold uppercase text-stone-400 mb-2.5 tracking-wider border-b pb-1 font-sans">Staged Items List</h3>
-                      <div className="space-y-2 max-h-56 overflow-y-auto custom-scroll pr-1">
+                    <div className="bg-white rounded-xl border border-stone-200 p-3 shadow-xs no-print font-sans">
+                      <h3 className="text-[10px] font-extrabold uppercase text-stone-400 mb-2.5 tracking-wider border-b pb-1 font-sans font-bold">Staged Items List</h3>
+                      <div className="space-y-2 max-h-56 overflow-y-auto custom-scroll pr-1 font-sans">
                         {addedItems.map((item) => (
                           <div key={item.id} className="flex justify-between items-center text-xs bg-stone-50 p-2.5 rounded-lg border border-stone-200 animate-fadeIn">
-                            <div className="flex items-center gap-2.5 flex-1">
+                            <div className="flex items-center gap-2.5 flex-1 font-semibold">
                               {/* checklist tickbox - moves item directly to Bag without shifting tab layout */}
                               <button 
                                 type="button"
@@ -1378,20 +1422,20 @@
                                 <i className="fa-solid fa-check text-xs text-transparent hover:text-emerald-600"></i>
                               </button>
                               
-                              <div className="font-bold text-stone-800">
-                                <span className="text-stone-900 text-sm font-mono">{Math.round(item.qty)}</span> × <span className="uppercase font-mono">{item.name}</span> 
+                              <div className="font-bold text-stone-800 font-sans">
+                                <span className="text-stone-900 text-sm font-mono">{Math.round(item.qty)}</span> × <span className="uppercase font-sans font-bold">{item.name}</span> 
                                 {item.code !== "—" && <span className="font-mono text-[9px] text-indigo-600 ml-1.5 bg-indigo-50 px-1.5 py-0.5 rounded font-semibold font-sans">code: {item.code}</span>}
                               </div>
                             </div>
                             
-                            <div className="flex items-center gap-3 font-semibold">
+                            <div className="flex items-center gap-3 font-semibold font-sans">
                               <span className="font-mono text-stone-700 font-extrabold text-sm">{Math.round(item.totalAmount).toFixed(0)}</span>
                               <button 
                                 type="button"
                                 onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} 
                                 className="text-stone-300 hover:text-rose-600 p-1 transition-colors"
                               >
-                                <i className="fa-solid fa-trash-can text-sm"></i>
+                                <i className="fa-solid fa-trash-can text-sm font-sans"></i>
                               </button>
                             </div>
                           </div>
@@ -1411,7 +1455,7 @@
                 {/* Fully Scrollable Context via flex-1, min-h-0 and overflow-y-auto */}
                 <div className="flex-1 min-h-0 overflow-y-auto custom-scroll space-y-3 pb-3 pr-1">
                   
-                  <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm no-print">
+                  <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm no-print font-sans">
                     <div className="flex justify-between items-center border-b pb-2 mb-2">
                       <span className="text-xs font-black text-stone-500 uppercase tracking-wider font-sans"><i className="fa-solid fa-bag-shopping text-stone-400 font-sans"></i> Tallied Bag Items</span>
                       <span className="text-[10px] text-stone-400 font-mono">Count: {baggedItems.length}</span>
@@ -1422,11 +1466,11 @@
                         Bag is currently empty. Check items from Staged List on Tab 1 to fill.
                       </div>
                     ) : (
-                      <div className="space-y-2">
+                      <div className="space-y-2 font-sans font-semibold">
                         {baggedItems.map((item) => (
                           <div key={item.id} className="p-2.5 bg-stone-50 rounded-lg border border-stone-200 space-y-2">
-                            <div className="flex justify-between items-center">
-                              <span className="font-bold text-stone-900 uppercase font-mono">{item.name}</span>
+                            <div className="flex justify-between items-center font-sans font-bold">
+                              <span className="font-bold text-stone-900 uppercase font-sans font-bold">{item.name}</span>
                               <button 
                                 type="button"
                                 onClick={() => {
@@ -1444,7 +1488,7 @@
                               <div className="col-span-4 text-[10px] text-stone-500 font-bold font-sans">
                                 Price: <span className="font-mono text-stone-900">{Math.round(item.basePrice)}</span>
                               </div>
-                              <div className="col-span-5 flex items-center gap-1.5">
+                              <div className="col-span-5 flex items-center gap-1.5 font-sans font-bold">
                                 <label className="text-[9px] font-bold text-stone-400 uppercase font-sans font-semibold">Less:</label>
                                 <input 
                                   type="text" 
@@ -1478,78 +1522,120 @@
                     </div>
                   )}
 
-                  {/* GENERATED BILL LIVE PREVIEW SHOWN INSIDE THE BAG SCROLLABLE TAB */}
+                  {/* COLLAPSIBLE LIVE RECEIPT PREVIEW SHOWN INSIDE THE BAG SCROLLABLE TAB */}
                   {baggedItems.length > 0 && (
-                    <div className="no-print mt-2 space-y-2 animate-fadeIn">
-                      <span className="block text-[10px] font-extrabold text-stone-400 uppercase tracking-wider font-sans pl-1">Live Receipt Preview</span>
+                    <div className="no-print mt-2 space-y-2 font-sans font-bold">
+                      {/* Collapse/Expand Toggle Header bar with - / + indicators */}
+                      <button 
+                        type="button" 
+                        onClick={() => setShowPreview(!showPreview)} 
+                        className="w-full bg-stone-200 hover:bg-stone-300 p-2.5 rounded-xl border border-stone-300 flex justify-between items-center text-xs font-bold text-stone-700 tracking-wider font-sans transition-all"
+                      >
+                        <span><i className="fa-solid fa-receipt mr-1.5"></i> Collapsible Receipt Preview</span>
+                        <span>{showPreview ? <i className="fa-solid fa-minus"></i> : <i className="fa-solid fa-plus"></i>}</span>
+                      </button>
                       
                       {/* Interactive physical 58mm POS styled thermal copy paper slip */}
-                      <div className="bg-white border-2 border-stone-300 rounded-xl p-4 shadow-md font-mono text-[14px] font-black text-black leading-tight border-dashed mx-auto max-w-[340px]">
-                        <div className="text-center pb-2 mb-2 border-b border-black">
-                          <h2 className="text-base font-bold uppercase tracking-wider">ESTIMATE RECEIPT</h2>
-                          <p className="text-[10px] font-bold">Rough Statement Profile</p>
-                          <div className="mt-1.5 text-center text-[11px] border-y border-dashed border-black py-1">
-                            {getThreeLetterCode(customerName)} ({getThreeLetterCode(customerCity)}) - {billDate}
-                          </div>
-                        </div>
-
-                        {/* Tightly aligned 4 columns list: QT | ITEM | P | AMT (Code drawn on new line below) */}
-                        <div className="w-full text-left mt-1 text-[13px]">
-                          <div className="flex justify-between border-b border-black text-[10px] uppercase font-bold pb-1 mb-1.5">
-                            <span className="w-7 text-center">QT</span>
-                            <span className="flex-1 text-left pl-1">ITEM</span>
-                            <span className="w-16 text-right">P</span>
-                            <span className="w-16 text-right">AMT</span>
+                      {showPreview && (
+                        <div className="bg-white border-2 border-stone-300 rounded-xl p-4 shadow-md font-mono text-[14px] font-black text-black leading-tight border-dashed mx-auto max-w-[340px] animate-fadeIn">
+                          <div className="text-center pb-2 mb-2 border-b border-black">
+                            <h2 className="text-base font-bold uppercase tracking-wider">ESTIMATE RECEIPT</h2>
+                            <p className="text-[10px] font-bold">Rough Statement Profile</p>
+                            <div className="mt-1.5 text-center text-[11px] border-y border-dashed border-black py-1">
+                              {getThreeLetterCode(customerName)} ({getThreeLetterCode(customerCity)}) - {billDate}
+                            </div>
                           </div>
 
-                          <div className="divide-y divide-stone-200">
-                            {baggedItems.map((item, idx) => {
-                              const cleanCode = (item.code && item.code !== "—") ? item.code.trim() : "";
-                              return (
-                                <div key={idx} className="flex justify-between py-1 items-start font-black">
-                                  <span className="w-7 text-center font-mono">{Math.round(item.qty)}</span>
-                                  <span className="flex-1 text-left pl-1 whitespace-pre-wrap break-all leading-tight font-black">
-                                    <div>{item.name.trim().toUpperCase()}</div>
-                                    {cleanCode && (
-                                      <div className="text-[11px] text-stone-600 font-mono mt-0.5 font-bold">
-                                        {cleanCode.toUpperCase()}
-                                      </div>
-                                    )}
-                                  </span>
-                                  <span className="w-16 text-right font-mono">{Math.round(item.finalUnitPrice)}</span>
-                                  <span className="w-16 text-right font-mono font-black">{Math.round(item.totalAmount)}</span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
+                          {/* Tightly aligned 4 columns list: QT | ITEM | P | AMT (Code drawn on new line below) */}
+                          <div className="w-full text-left mt-1 text-[13px]">
+                            <div className="flex justify-between border-b border-black text-[10px] uppercase font-bold pb-1 mb-1.5">
+                              <span className="w-7 text-center">QT</span>
+                              <span className="flex-1 text-left pl-1">ITEM</span>
+                              <span className="w-16 text-right">P</span>
+                              <span className="w-16 text-right">AMT</span>
+                            </div>
 
-                        <div className="mt-3 pt-2 border-t border-dashed border-black text-right space-y-1 text-[13px]">
-                          <div className="flex justify-between font-bold text-stone-800">
-                            <span>Gross Aggregation:</span>
-                            <span className="font-mono">{Math.round(grossCalculatedSum)}</span>
+                            <div className="divide-y divide-stone-200">
+                              {baggedItems.map((item, idx) => {
+                                const cleanCode = (item.code && item.code !== "—") ? item.code.trim() : "";
+                                return (
+                                  <div key={idx} className="flex justify-between py-1 items-start font-black">
+                                    <span className="w-7 text-center font-mono">{Math.round(item.qty)}</span>
+                                    <span className="flex-1 text-left pl-1 whitespace-pre-wrap break-all leading-tight font-black">
+                                      <div>{item.name.trim().toUpperCase()}</div>
+                                      {cleanCode && (
+                                        <div className="text-[11px] text-stone-600 font-mono mt-0.5 font-bold">
+                                          {cleanCode.toUpperCase()}
+                                        </div>
+                                      )}
+                                    </span>
+                                    <span className="w-16 text-right font-mono">{Math.round(item.finalUnitPrice)}</span>
+                                    <span className="w-16 text-right font-mono font-black">{Math.round(item.totalAmount)}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
-                          <div className="flex justify-between text-[14px] font-black border-t border-black pt-1.5 font-bold">
-                            <span>Net Liability:</span>
-                            <span className="font-mono">{Math.round(grossCalculatedSum)}</span>
+
+                          <div className="mt-3 pt-2 border-t border-dashed border-black text-right space-y-1 text-[13px]">
+                            <div className="flex justify-between font-bold text-stone-800">
+                              <span>Gross Aggregation:</span>
+                              <span className="font-mono">{Math.round(grossCalculatedSum)}</span>
+                            </div>
+                            <div className="flex justify-between text-[14px] font-black border-t border-black pt-1.5 font-bold">
+                              <span>Net Liability:</span>
+                              <span className="font-mono">{Math.round(grossCalculatedSum)}</span>
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )}
 
                 </div>
 
-                {/* Combined print/generate bill control button (no PDF downloding) */}
-                <div className="no-print pt-1 pb-1 flex-shrink-0">
+                {/* Separated dock of Control Buttons */}
+                <div className="no-print pt-1.5 pb-1 flex-shrink-0 space-y-2 border-t border-stone-200 font-sans font-bold">
+                  {/* BUTTON 1: Generate & Save Bill still button with ticks/indicators */}
                   <button 
                     type="button"
-                    onClick={handleGenerateCleanBill} 
+                    onClick={handleGenerateAndSaveBill} 
                     disabled={baggedItems.length === 0} 
-                    className="w-full py-3.5 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-1.5 font-sans animate-pulse"
+                    className="w-full py-3.5 bg-stone-900 hover:bg-stone-800 disabled:bg-stone-200 disabled:text-stone-400 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-1.5"
                   >
-                    <i className="fa-solid fa-copy font-sans"></i> Generate & Copy Bill
+                    <i className="fa-solid fa-sd-card"></i> 
+                    {saveStatus === 1 ? "Saving to Cloud..." :
+                     saveStatus === 2 ? "✓ Saved to Cloud" :
+                     saveStatus === 3 ? "✓✓ Saved to Sheet" :
+                     saveStatus === -1 ? "✗ Cloud Sync Failed" : 
+                     "Generate & Save Bill"}
                   </button>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    {/* BUTTON 2: Print Receipt (standard trigger) */}
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setGeneratedItems(baggedItems);
+                        setIsBillGenerated(true);
+                        setTimeout(() => window.print(), 100);
+                      }}
+                      disabled={baggedItems.length === 0} 
+                      className="py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-stone-200 disabled:text-stone-400 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-1.5"
+                    >
+                      <i className="fa-solid fa-print"></i> Print Receipt
+                    </button>
+
+                    {/* BUTTON 3: Copy Receipt Image (300% high-dpi clipboard copy) */}
+                    <button 
+                      type="button" 
+                      onClick={triggerClipboardImageCopy}
+                      disabled={baggedItems.length === 0} 
+                      className="py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-stone-200 disabled:text-stone-400 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider transition-all shadow-md flex items-center justify-center gap-1.5"
+                    >
+                      <i className="fa-solid fa-copy"></i> Copy Image
+                    </button>
+                  </div>
                 </div>
 
               </div>
@@ -1559,11 +1645,11 @@
             {currentTab === "products" && (
               <div className="flex-grow flex flex-col gap-3 overflow-hidden font-sans">
                 <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 space-y-3 overflow-y-auto custom-scroll flex-grow">
-                  <h2 className="text-xs font-bold text-stone-900 uppercase tracking-widest flex items-center gap-1.5 font-sans"><i className="fa-solid fa-box text-stone-500 font-sans"></i> Catalog Registry Matrix</h2>
+                  <h2 className="text-xs font-bold text-stone-900 uppercase tracking-widest flex items-center gap-1.5 font-sans font-bold"><i className="fa-solid fa-box text-stone-500 font-sans"></i> Catalog Registry Matrix</h2>
                   
                   <form onSubmit={handleProductAddSubmit} className="space-y-2 bg-stone-50 p-3 rounded-lg border border-stone-200">
-                    <input type="text" required placeholder="Product Identification Name..." value={newProdName} onChange={(e) => setNewProdNameState(e.target.value)} className="w-full px-3 py-2 text-xs border bg-white rounded-lg font-semibold font-sans font-bold" />
-                    <input type="text" placeholder="Category Type..." value={newProdCategory} onChange={(e) => setNewProdCategory(e.target.value)} className="w-full px-3 py-2 text-xs border bg-white rounded-lg font-semibold font-sans font-bold" />
+                    <input type="text" required placeholder="Product Identification Name..." value={newProdName} onChange={(e) => setNewProdNameState(e.target.value)} className="w-full px-3 py-2 text-xs border bg-white rounded-lg font-semibold font-sans font-bold font-sans" />
+                    <input type="text" placeholder="Category Type..." value={newProdCategory} onChange={(e) => setNewProdCategory(e.target.value)} className="w-full px-3 py-2 text-xs border bg-white rounded-lg font-semibold font-sans font-bold font-sans" />
                     <button type="submit" className="w-full py-2 bg-stone-900 text-white text-xs font-bold rounded-lg shadow-sm font-sans font-bold">Commit Entry to Database</button>
                   </form>
 
@@ -1578,14 +1664,14 @@
 
                   <input type="text" placeholder="Filter active local matrix directory..." value={productFilterQuery} onChange={(e) => setProductFilterQuery(e.target.value)} className="w-full px-3 py-2 text-xs bg-stone-50 border border-stone-200 rounded-lg font-semibold font-sans" />
                   
-                  <div className="border rounded-lg divide-y max-h-56 overflow-y-auto custom-scroll bg-white shadow-sm">
+                  <div className="border rounded-lg divide-y max-h-56 overflow-y-auto custom-scroll bg-white shadow-sm font-sans">
                     {getSortedProducts()
                       .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
                       .map(p => (
                         <div key={p.id} className="flex justify-between items-center p-3 text-xs font-semibold font-sans font-bold">
                           <div>
-                            <span className="text-stone-800">{p.name}</span>
-                            <span className="text-[9px] bg-stone-100 text-stone-500 px-2 py-0.5 ml-2 rounded-full font-mono font-bold font-semibold">{p.category || "General"}</span>
+                            <span className="text-stone-800 font-bold">{p.name}</span>
+                            <span className="text-[9px] bg-stone-100 text-stone-500 px-2 py-0.5 ml-2 rounded-full font-mono font-bold font-semibold font-sans">{p.category || "General"}</span>
                           </div>
                           <button type="button" onClick={() => handleProductDelete(p.id)} className="text-stone-300 hover:text-rose-600 p-1 font-sans"><i className="fa-solid fa-trash-can font-sans"></i></button>
                         </div>
@@ -1598,120 +1684,121 @@
             {/* Tab 4: Historical Logs & Admin Console */}
             {currentTab === "logs" && (
               <div className="flex-grow flex flex-col gap-3 overflow-hidden font-sans font-bold font-semibold">
-                <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 space-y-3 overflow-y-auto custom-scroll flex-grow">
+                <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 space-y-3 overflow-y-auto custom-scroll flex-grow font-sans">
                   <h2 className="text-xs font-bold text-stone-900 uppercase tracking-widest flex items-center gap-1.5 font-sans font-bold"><i className="fa-solid fa-history text-stone-500 font-sans"></i> Protected Historic Index</h2>
 
-                  {!isVerified ? (
-                    <div className="space-y-2 animate-fadeIn font-sans font-semibold">
-                      <p className="text-[10px] text-stone-500 font-semibold font-sans">Enter access key:</p>
+                  {/* Public list showing Last 2 Logs without passcode protection */}
+                  <div className="space-y-2">
+                    <span className="block text-[10px] text-stone-400 uppercase tracking-wider font-semibold font-sans">Log History Manifest</span>
+                    
+                    <div className="space-y-2 max-h-80 overflow-y-auto custom-scroll font-sans font-semibold">
+                      {getFilteredLogBills().map((b) => (
+                        <div key={b.id} className="border border-stone-100 rounded-xl p-3 hover:bg-stone-50 text-xs bg-stone-50 space-y-2 font-sans font-semibold font-semibold font-bold animate-fadeIn">
+                          <div className="flex justify-between font-bold font-sans font-sans font-bold">
+                            <div>
+                              <span className="text-stone-900 text-sm font-black font-sans font-sans font-bold">{b.customerName}</span>
+                              {b.customerCity && <span className="text-[9px] bg-stone-200 text-stone-600 px-1.5 py-0.5 ml-2 rounded-full font-mono font-bold font-semibold font-bold font-sans">{b.customerCity}</span>}
+                            </div>
+                            <span className="font-mono text-stone-800 font-extrabold text-sm font-bold">{Math.round(b.totalAmount || 0)}</span>
+                          </div>
+                          
+                          <div className="flex justify-between items-center text-[10px] text-stone-400 border-t pt-1.5 font-sans font-sans font-sans font-semibold">
+                            <span>Date: {b.date}</span>
+                            <div className="flex gap-2 font-sans font-semibold font-bold">
+                              <button type="button" onClick={() => handleLoadHistoricalBill(b)} className="px-2 py-1 bg-stone-900 text-white rounded font-bold text-[9px] font-sans font-sans font-bold">Load Manifest</button>
+                              {isVerified && (
+                                <>
+                                  <button type="button" onClick={() => openLogEditor(b)} className="px-2 py-1 bg-amber-600 text-white rounded font-bold text-[9px] font-sans font-sans font-sans font-bold"><i className="fa-solid fa-pen-to-square font-sans font-bold"></i> Edit</button>
+                                  <button type="button" onClick={() => deleteBillLogEntry(b.id)} className="px-2 py-1 bg-rose-600 text-white rounded font-bold text-[9px] font-sans font-sans font-sans font-bold"><i className="fa-solid fa-trash-can font-sans font-bold"></i> Delete</button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!isVerified && (
+                    <div className="space-y-2 animate-fadeIn font-sans border-t border-stone-200 pt-3 mt-1 text-center">
+                      <p className="text-[10px] text-stone-500 font-bold font-sans">Older logs are locked. Enter access key to view full index:</p>
                       <input 
                         type="password" 
                         placeholder="Access Code..." 
                         value={passwordInput} 
                         onChange={e => handleTabVerificationInput(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border bg-stone-50 rounded-lg font-mono focus:outline-none focus:border-stone-800"
+                        className="w-full max-w-[160px] mx-auto text-center px-3 py-1.5 text-xs border bg-stone-50 rounded-lg font-mono focus:outline-none focus:border-stone-800 font-bold"
                       />
                     </div>
-                  ) : (
-                    <div className="space-y-4 animate-fadeIn font-sans font-sans font-semibold">
-                      <div className="flex justify-between items-center pb-2 border-b border-stone-200 font-sans font-bold">
-                        <span className="text-xs text-emerald-700 font-bold uppercase"><i className="fa-solid fa-shield-halved font-sans font-bold"></i> Access Approved</span>
-                        <button type="button" onClick={() => { setIsVerified(false); setPasswordInput(""); setEditingLogBill(null); }} className="text-xs text-stone-400 underline font-semibold font-sans font-sans font-bold">Lock Index</button>
+                  )}
+
+                  {isVerified && editingLogBill && (
+                    <div className="bg-stone-50 border-2 border-amber-300 rounded-xl p-3 space-y-3 animate-fadeIn font-sans font-bold">
+                      <div className="flex justify-between items-center border-b pb-1 font-sans">
+                        <span className="text-xs font-bold text-amber-800 font-sans font-bold">Edit Manifest File: {editingLogBill.customerName}</span>
+                        <button type="button" onClick={() => setEditingLogBill(null)} className="text-[10px] text-stone-500 font-bold underline font-sans font-sans">Cancel</button>
                       </div>
 
-                      {/* Full log inline editor */}
-                      {editingLogBill ? (
-                        <div className="bg-stone-50 border-2 border-amber-300 rounded-xl p-3 space-y-3 animate-fadeIn font-sans font-bold">
-                          <div className="flex justify-between items-center border-b pb-1 font-sans">
-                            <span className="text-xs font-bold text-amber-800 font-sans font-bold">Edit Manifest File: {editingLogBill.customerName}</span>
-                            <button type="button" onClick={() => setEditingLogBill(null)} className="text-[10px] text-stone-500 font-bold underline font-sans font-sans">Cancel</button>
+                      <div className="space-y-2 font-sans font-sans font-sans font-bold">
+                        <div className="grid grid-cols-2 gap-2 font-sans font-semibold font-bold">
+                          <div>
+                            <label className="text-[8px] font-bold uppercase block font-sans font-sans font-sans font-bold">Customer</label>
+                            <input 
+                              type="text" 
+                              value={editingLogBill.customerName} 
+                              onChange={e => setEditingLogBill({...editingLogBill, customerName: e.target.value})}
+                              className="w-full p-1 text-xs border bg-white rounded font-sans font-bold font-semibold font-bold"
+                            />
                           </div>
-
-                          <div className="space-y-2 font-sans font-sans font-sans font-bold">
-                            <div className="grid grid-cols-2 gap-2 font-sans font-semibold font-bold">
-                              <div>
-                                <label className="text-[8px] font-bold uppercase block font-sans font-sans font-sans font-bold">Customer</label>
-                                <input 
-                                  type="text" 
-                                  value={editingLogBill.customerName} 
-                                  onChange={e => setEditingLogBill({...editingLogBill, customerName: e.target.value})}
-                                  className="w-full p-1 text-xs border bg-white rounded font-sans font-bold font-semibold font-bold"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-[8px] font-bold uppercase block font-sans font-sans font-sans font-sans font-bold">City</label>
-                                <input 
-                                  type="text" 
-                                  value={editingLogBill.customerCity} 
-                                  onChange={e => setEditingLogBill({...editingLogBill, customerCity: e.target.value})}
-                                  className="w-full p-1 text-xs border bg-white rounded font-sans font-sans font-bold"
-                                />
-                              </div>
-                            </div>
-
-                            <div className="space-y-1.5 border-t pt-2 mt-2 font-sans font-bold">
-                              <span className="block text-[8px] font-bold uppercase text-stone-400 font-sans font-sans font-sans font-sans font-bold">Bill Items</span>
-                              {(editingLogBill.items || []).map((item, idx) => (
-                                <div key={idx} className="flex gap-1.5 items-center bg-white p-1.5 rounded border border-stone-200 text-xs font-sans font-sans font-bold">
-                                  <span className="font-bold flex-1 uppercase truncate font-semibold font-bold">{item.name}</span>
-                                  
-                                  <input 
-                                    type="number" 
-                                    value={item.qty} 
-                                    onChange={e => handleLogItemQtyChange(idx, e.target.value)}
-                                    className="w-12 p-0.5 text-center border font-mono font-semibold"
-                                    title="Edit Quantity"
-                                  />
-                                  <input 
-                                    type="text" 
-                                    placeholder="Less" 
-                                    value={item.less === "—" ? "" : item.less} 
-                                    onChange={e => handleLogItemLessChange(idx, e.target.value)}
-                                    className="w-12 p-0.5 text-center border font-mono font-semibold"
-                                    title="Edit Less"
-                                  />
-                                  <span className="font-mono font-bold text-stone-700 w-16 text-right font-sans font-bold font-semibold font-bold">{item.totalAmount ? Math.round(item.totalAmount) : "0"}</span>
-                                  
-                                  <button type="button" onClick={() => handleRemoveLogItem(idx)} className="text-rose-500 p-0.5 font-sans font-semibold">
-                                    <i className="fa-solid fa-xmark text-xs font-sans font-sans"></i>
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-
-                            <button 
-                              type="button"
-                              onClick={handleSaveLogEdits}
-                              className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs font-sans font-bold font-semibold font-bold"
-                            >
-                              Save Manifest Changes
-                            </button>
+                          <div>
+                            <label className="text-[8px] font-bold uppercase block font-sans font-sans font-sans font-sans font-bold">City</label>
+                            <input 
+                              type="text" 
+                              value={editingLogBill.customerCity} 
+                              onChange={e => setEditingLogBill({...editingLogBill, customerCity: e.target.value})}
+                              className="w-full p-1 text-xs border bg-white rounded font-sans font-sans font-bold"
+                            />
                           </div>
                         </div>
-                      ) : (
-                        <div className="space-y-2 max-h-80 overflow-y-auto custom-scroll font-sans font-semibold font-bold">
-                          {cloudBills.map((b) => (
-                            <div key={b.id} className="border border-stone-100 rounded-xl p-3 hover:bg-stone-50 text-xs bg-stone-50 space-y-2 font-sans font-semibold font-semibold font-bold">
-                              <div className="flex justify-between font-bold font-sans font-sans font-bold">
-                                <div>
-                                  <span className="text-stone-900 text-sm font-black font-sans font-sans font-bold">{b.customerName}</span>
-                                  {b.customerCity && <span className="text-[9px] bg-stone-200 text-stone-600 px-1.5 py-0.5 ml-2 rounded-full font-mono font-bold font-semibold font-bold">{b.customerCity}</span>}
-                                </div>
-                                <span className="font-mono text-stone-800 font-extrabold text-sm font-bold">{Math.round(b.totalAmount || 0)}</span>
-                              </div>
+
+                        <div className="space-y-1.5 border-t pt-2 mt-2 font-sans font-bold">
+                          <span className="block text-[8px] font-bold uppercase text-stone-400 font-sans font-sans font-sans font-sans font-bold">Bill Items</span>
+                          {(editingLogBill.items || []).map((item, idx) => (
+                            <div key={idx} className="flex gap-1.5 items-center bg-white p-1.5 rounded border border-stone-200 text-xs font-sans font-sans font-bold">
+                              <span className="font-bold flex-1 uppercase truncate font-semibold font-bold font-sans">{item.name}</span>
                               
-                              <div className="flex justify-between items-center text-[10px] text-stone-400 border-t pt-1.5 font-sans font-sans font-sans font-semibold">
-                                <span>Date: {b.date}</span>
-                                <div className="flex gap-2 font-sans font-semibold font-bold">
-                                  <button type="button" onClick={() => handleLoadHistoricalBill(b)} className="px-2 py-1 bg-stone-900 text-white rounded font-bold text-[9px] font-sans font-sans font-bold">Load Manifest</button>
-                                  <button type="button" onClick={() => openLogEditor(b)} className="px-2 py-1 bg-amber-600 text-white rounded font-bold text-[9px] font-sans font-sans font-sans font-bold"><i className="fa-solid fa-pen-to-square font-sans"></i> Edit</button>
-                                  <button type="button" onClick={() => deleteBillLogEntry(b.id)} className="px-2 py-1 bg-rose-600 text-white rounded font-bold text-[9px] font-sans font-sans font-sans font-bold"><i className="fa-solid fa-trash-can font-sans"></i> Delete</button>
-                                </div>
-                              </div>
+                              <input 
+                                type="number" 
+                                value={item.qty} 
+                                onChange={e => handleLogItemQtyChange(idx, e.target.value)}
+                                className="w-12 p-0.5 text-center border font-mono font-semibold"
+                                title="Edit Quantity"
+                              />
+                              <input 
+                                type="text" 
+                                placeholder="Less" 
+                                value={item.less === "—" ? "" : item.less} 
+                                onChange={e => handleLogItemLessChange(idx, e.target.value)}
+                                className="w-12 p-0.5 text-center border font-mono font-semibold font-sans"
+                                title="Edit Less"
+                              />
+                              <span className="font-mono font-bold text-stone-700 w-16 text-right font-sans font-bold font-semibold font-bold">{item.totalAmount ? Math.round(item.totalAmount) : "0"}</span>
+                              
+                              <button type="button" onClick={() => handleRemoveLogItem(idx)} className="text-rose-500 p-0.5 font-sans font-semibold">
+                                <i className="fa-solid fa-xmark text-xs font-sans font-sans"></i>
+                              </button>
                             </div>
                           ))}
                         </div>
-                      )}
+
+                        <button 
+                          type="button"
+                          onClick={handleSaveLogEdits}
+                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs font-sans font-bold font-semibold font-bold"
+                        >
+                          Save Manifest Changes
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1750,7 +1837,7 @@
                 onClick={() => setCurrentTab("products")} 
                 className={`flex flex-col items-center gap-1 py-1 px-3 transition-colors ${currentTab === "products" ? "text-amber-400 font-bold" : "text-stone-400 hover:text-stone-200"}`}
               >
-                <i className="fa-solid fa-box-open text-base font-sans"></i>
+                <i className="fa-solid fa-box-open text-base font-sans font-sans"></i>
                 <span className="text-[9px] uppercase tracking-wider font-sans font-bold">Catalog</span>
               </button>
               
@@ -1813,7 +1900,7 @@
                 <span>Gross Aggregation:</span>
                 <span>{Math.round(generatedItems.reduce((acc, i) => acc + (i.totalAmount || 0), 0))}</span>
               </div>
-              <div className="flex justify-between text-[14px] font-black border-t border-black pt-1.5">
+              <div className="flex justify-between text-[14px] font-black border-t border-black pt-1">
                 <span>Net Liability:</span>
                 <span>{Math.round(generatedItems.reduce((acc, i) => acc + (i.totalAmount || 0), 0))}</span>
               </div>
@@ -1830,7 +1917,7 @@
                 <p className="text-xs text-stone-600 font-sans font-semibold font-sans">Are you sure you want to initialize a new bill? Staged and Bagged entries will be discarded.</p>
                 <div className="flex gap-2.5 justify-end font-sans">
                   <button type="button" onClick={() => setShowNewBillModal(false)} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-lg text-xs font-bold font-sans">Cancel</button>
-                  <button type="button" onClick={() => { handleResetAll(); setShowNewBillModal(false); }} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold font-sans font-semibold font-sans">Confirm Reset</button>
+                  <button type="button" onClick={() => { handleResetAll(); setShowNewBillModal(false); }} className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold font-sans font-semibold font-sans font-sans font-bold">Confirm Reset</button>
                 </div>
               </div>
             </div>
