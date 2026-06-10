@@ -202,11 +202,14 @@
       const [isVerified, setIsVerified] = useState(false);
       const [passwordInput, setPasswordInput] = useState("");
       const [editingLogBill, setEditingLogBill] = useState(null);
-      const [mergeSource, setMergeSource] = useState("");
-      const [mergeTarget, setMergeTarget] = useState("");
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
+
+      // Search and selection metrics states
+      const [selectedCatalogProduct, setSelectedCatalogProduct] = useState(null);
+      const [mergeTargetSearch, setMergeTargetSearch] = useState("");
+      const [showMergeSuggestions, setShowMergeTargetSuggestions] = useState(false);
 
       const custRef = useRef(null);
       const prodRef = useRef(null);
@@ -663,6 +666,13 @@
             setSaveStatus(sheetsSucceeded ? 3 : 2);
           } catch (e) { setSaveStatus(-1); }
         } else { setSaveStatus(-1); }
+
+        // AUTO-TRIGGER BLE direct printing if paired & active
+        if (bleCharacteristic) {
+          try {
+            await printBLEThermalDirectly(baggedItems, finalClientName, customerCity, printDateFormatted);
+          } catch (e) { console.warn("BLE print dispatch bypassed.", e); }
+        }
       };
 
       const saveTransactionToGoogleSheet = async (numericId, clientName, amountValue) => {
@@ -694,6 +704,14 @@
           printBody.innerHTML = renderReceiptForSpool(logItem.items || [], logItem.customerName, logItem.customerCity, printDateFormatted);
         }
         window.print();
+
+        // AUTO-TRIGGER BLE direct printing if paired & active from Logs Tab too
+        if (bleCharacteristic) {
+          try {
+            const printDateFormatted = formatInvoiceDateTime(logItem.timestamp ? new Date(logItem.timestamp) : new Date());
+            printBLEThermalDirectly(logItem.items || [], logItem.customerName, logItem.customerCity, printDateFormatted);
+          } catch (e) { console.warn("BLE print logs bypassed.", e); }
+        }
       };
 
       const handleFastDraftTabClick = () => {
@@ -797,7 +815,6 @@
 
       const getSecureLogBills = () => isVerified ? cloudBills : cloudBills.slice(0, 2);
 
-      // FIXED: Restored complete product addition form submission callback (Rule 4)
       const handleProductAddSubmit = async (e) => {
         e.preventDefault();
         const trimmed = newProdName.trim();
@@ -819,6 +836,38 @@
             console.error(err);
             triggerNotification("Failed to add product.");
           }
+        }
+      };
+
+      const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
+        if (!bleCharacteristic) return;
+        const encoder = new TextEncoder();
+        let esc = [];
+
+        esc.push(0x1B, 0x40); // Init
+        esc.push(0x1B, 0x61, 0x01); // Center
+        esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
+        esc.push(...encoder.encode(`${custName.toUpperCase()} - ${activeDate}\n`));
+        esc.push(...encoder.encode("--------------------------------\n"));
+        
+        esc.push(0x1B, 0x61, 0x00); // Left align
+        const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
+        sortedItems.forEach(item => {
+          const nameStr = item.name.trim().toUpperCase().slice(0, 15);
+          const qStr = String(Math.round(item.qty)).padEnd(3);
+          const pStr = String(Math.round(item.finalUnitPrice)).padStart(4);
+          const totalStr = String(Math.round(item.totalAmount)).padStart(6);
+          esc.push(...encoder.encode(`${qStr} ${nameStr.padEnd(15)} ${pStr} ${totalStr}\n`));
+        });
+
+        esc.push(...encoder.encode("--------------------------------\n"));
+        const sumTotal = Math.round(itemsList.reduce((acc, i) => acc + i.totalAmount, 0));
+        esc.push(...encoder.encode(`TOTAL LIABILITY:         ${sumTotal}\n\n\n`));
+        esc.push(0x1D, 0x56, 0x42, 0x00); // Cut
+
+        const bytes = new Uint8Array(esc);
+        for (let i = 0; i < bytes.length; i += 20) {
+          await bleCharacteristic.writeValue(bytes.slice(i, i + 20));
         }
       };
 
@@ -855,7 +904,7 @@
                   onFocus={() => setShowCustSuggestions(true)}
                   className="w-full px-2 py-1.5 text-xs bg-stone-50 border rounded font-bold focus:border-stone-500 focus:outline-none"
                 />
-                {showCustSuggestions && dbCustomers.length > 0 && (
+                {showCustSuggestions && customerName.trim() !== "" && dbCustomers.length > 0 && (
                   <div className="absolute top-full mt-1.5 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
                     {dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase())).map((c, i) => (
                       <div key={i} onMouseDown={() => { handleCustomerSearchAndSelect(c.name); setShowCustSuggestions(false); }} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
@@ -943,9 +992,9 @@
                     />
                   </form>
                   {suggestions.length > 0 && (
-                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/90 backdrop-blur-md border rounded shadow-lg z-50 divide-y divide-stone-100">
+                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/40 backdrop-blur-lg border border-white/20 shadow-xl rounded-lg z-50 divide-y divide-white/20">
                       {suggestions.map(p => (
-                        <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-1.5 text-xs font-bold hover:bg-stone-800/10 cursor-pointer">{p.name}</div>
+                        <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-white/30 text-stone-900 cursor-pointer">{p.name}</div>
                       ))}
                     </div>
                   )}
@@ -1088,7 +1137,84 @@
                   <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Add Product Entry</button>
                 </form>
 
-                {/* Search / Filter bar for products catalog - Prevents blank/unfilterable list */}
+                {/* Search-Based Product Merging Sub-Console */}
+                {selectedCatalogProduct && (
+                  <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-2 animate-slide-up text-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="font-extrabold text-amber-900">Merge Product: <span className="uppercase text-stone-900">{selectedCatalogProduct.name}</span></span>
+                      <button type="button" onClick={() => { setSelectedCatalogProduct(null); setMergeTargetSearch(""); }} className="text-[10px] text-stone-500 underline font-bold">Cancel</button>
+                    </div>
+                    <p className="text-[10px] text-amber-800 leading-tight">All staged & bagged instances of this product will be renamed to the correct target product below.</p>
+                    <div className="relative">
+                      <input 
+                        type="text"
+                        autocomplete="new-password"
+                        placeholder="Search target product name..."
+                        value={mergeTargetSearch}
+                        onChange={(e) => { setMergeTargetSearch(e.target.value); setShowMergeTargetSuggestions(true); }}
+                        onFocus={() => setShowMergeTargetSuggestions(true)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded font-bold text-stone-800 focus:outline-none"
+                      />
+                      {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
+                        <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded shadow-lg z-50 divide-y divide-stone-100 mt-1">
+                          {cloudProducts
+                            .filter(p => p.id !== selectedCatalogProduct.id && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
+                            .slice(0, 5)
+                            .map(p => (
+                              <div 
+                                key={p.id}
+                                onMouseDown={() => {
+                                  setMergeTargetSearch(p.name);
+                                  setShowMergeTargetSuggestions(false);
+                                }}
+                                className="px-2.5 py-1.5 hover:bg-stone-100 cursor-pointer font-bold uppercase text-[11px] text-stone-800"
+                              >
+                                {p.name}
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={async () => {
+                        const target = mergeTargetSearch.trim();
+                        if (!target) {
+                          triggerNotification("Please select/search a target product.");
+                          return;
+                        }
+                        const targetItem = cloudProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
+                        if (!targetItem) {
+                          triggerNotification("Target product must exist in catalog directory.");
+                          return;
+                        }
+                        if (targetItem.id === selectedCatalogProduct.id) {
+                          triggerNotification("Cannot merge a product into itself.");
+                          return;
+                        }
+                        try {
+                          await window.firebaseBridge.addProductToCloud({ name: targetItem.name }); // Keep target validated
+                          await window.firebaseBridge.deleteProductFromCloud(selectedCatalogProduct.id);
+                          
+                          setAddedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(selectedCatalogProduct.name) ? { ...item, name: targetItem.name } : item));
+                          setBaggedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(selectedCatalogProduct.name) ? { ...item, name: targetItem.name } : item));
+                          
+                          setSelectedCatalogProduct(null);
+                          setMergeTargetSearch("");
+                          triggerNotification(`Merged "${selectedCatalogProduct.name}" into "${targetItem.name}"!`);
+                        } catch(e) {
+                          console.error(e);
+                          triggerNotification("Merge operation failed.");
+                        }
+                      }}
+                      className="w-full py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold text-xs"
+                    >
+                      Perform Search & Merge
+                    </button>
+                  </div>
+                )}
+
+                {/* Search / Filter bar for products catalog */}
                 <div className="bg-white p-2 border rounded-xl space-y-1">
                   <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
                   <input 
@@ -1104,11 +1230,28 @@
 
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll">
                   {cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase())).map(p => (
-                    <div key={p.id} className="flex justify-between items-center py-1.5 text-xs font-bold">
+                    <div 
+                      key={p.id} 
+                      className={`flex justify-between items-center py-1.5 px-2 text-xs font-bold rounded cursor-pointer ${selectedCatalogProduct?.id === p.id ? 'bg-amber-100 text-stone-900' : 'hover:bg-stone-50'}`}
+                      onClick={() => setSelectedCatalogProduct(p)}
+                    >
                       <span className="uppercase text-stone-800">{p.name}</span>
-                      <button type="button" onClick={() => handleCatalogDelete(p.id)} className="text-stone-300 hover:text-rose-600 transition-colors">
-                        <i className="fa-solid fa-trash-can"></i>
-                      </button>
+                      <div className="flex gap-2">
+                        <button 
+                          type="button" 
+                          onClick={(e) => { e.stopPropagation(); setSelectedCatalogProduct(p); }} 
+                          className="text-indigo-500 hover:text-indigo-700 font-extrabold uppercase text-[10px]"
+                        >
+                          Merge
+                        </button>
+                        <button 
+                          type="button" 
+                          onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.id); }} 
+                          className="text-stone-300 hover:text-rose-600 transition-colors"
+                        >
+                          <i className="fa-solid fa-trash-can"></i>
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
