@@ -202,6 +202,8 @@
       const [isVerified, setIsVerified] = useState(false);
       const [passwordInput, setPasswordInput] = useState("");
       const [editingLogBill, setEditingLogBill] = useState(null);
+      const [mergeSource, setMergeSource] = useState("");
+      const [mergeTarget, setMergeTarget] = useState("");
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
@@ -566,10 +568,41 @@
         }));
       };
 
-      // SYNCHRONOUS DOM RECEIPT RENDERER: Solves "Print but not printing" error (React async state lag)
+      // SYNCHRONOUS DOM RECEIPT RENDERER: Bolder/larger text, 10% less bold code output & sleek separation lines (Rule 3)
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = itemsList.reduce((acc, i) => acc + i.totalAmount, 0);
+
+        let itemRows = "";
+        sortedItems.forEach((item, idx) => {
+          const cleanCode = item.code && item.code !== "—" ? item.code.trim() : "";
+          itemRows += `
+            <tr class="align-top border-b-2 border-stone-250">
+              <td class="py-3.5 text-center font-mono font-black text-[38px]">${Math.round(item.qty)}</td>
+              <td class="py-3.5 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight text-[38px]">
+                <div class="font-extrabold leading-tight">${item.name.trim().toUpperCase()}</div>
+                ${cleanCode ? `
+                  <div class="text-[26px] text-stone-600 font-mono mt-1 font-medium leading-none">
+                    ${cleanCode.toUpperCase()}
+                  </div>
+                ` : ""}
+              </td>
+              <td class="py-3.5 text-right font-mono font-black text-[38px]">${Math.round(item.finalUnitPrice)}</td>
+              <td class="py-3.5 text-right font-mono font-black text-[38px]">${Math.round(item.totalAmount)}</td>
+            </tr>
+          `;
+          // Inject a sleek dotted separator line after every 5 entries (Rule 3)
+          if ((idx + 1) % 5 === 0 && (idx + 1) < sortedItems.length) {
+            itemRows += `
+              <tr>
+                <td colspan="4" class="py-1">
+                  <div class="border-b-4 border-dashed border-black w-full my-1"></div>
+                </td>
+              </tr>
+            `;
+          }
+        });
+
         return `
           <div class="text-center pb-3 mb-3 border-b-4 border-black">
             <h2 class="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
@@ -588,17 +621,7 @@
               </tr>
             </thead>
             <tbody>
-              ${sortedItems.map(item => `
-                <tr class="align-top border-b-2 border-stone-250">
-                  <td class="py-3.5 text-center font-mono">${Math.round(item.qty)}</td>
-                  <td class="py-3.5 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight">
-                    <div>${item.name.trim().toUpperCase()}</div>
-                    ${item.code && item.code !== "—" ? `<div class="text-[28px] text-stone-700 font-mono mt-1 font-bold"> ${item.code.toUpperCase()}</div>` : ""}
-                  </td>
-                  <td class="py-3.5 text-right font-mono">${Math.round(item.finalUnitPrice)}</td>
-                  <td class="py-3.5 text-right font-mono font-black">${Math.round(item.totalAmount)}</td>
-                </tr>
-              `).join('')}
+              ${itemRows}
             </tbody>
           </table>
           <div class="mt-8 pt-4 border-t-4 border-dashed border-black text-right space-y-2 text-[32px] font-black">
@@ -612,7 +635,7 @@
             </div>
           </div>
           <div class="mt-14 text-center text-[34px] font-bold pt-6 border-t-4 border-black">
-            Thanks for visiting!
+            Thank you<br/>Visit again
           </div>
         `;
       };
@@ -625,6 +648,11 @@
         setGeneratedItems(baggedItems);
         setIsBillGenerated(true);
         const printDateFormatted = formatInvoiceDateTime(billDate);
+
+        // Show warning message after clicking print (if BT is not connected) (Rule 3)
+        if (!bleCharacteristic || bleStatus !== "Connected to Seznik") {
+          triggerNotification("Warning: Bluetooth printer is not connected. Printing A4/System invoice only.");
+        }
 
         // Render synchronously directly to print block DOM before window.print() (Ensures absolute reliability)
         const printBody = document.getElementById("printable-bill-invoice");
@@ -698,6 +726,11 @@
 
       // Spools print synchronously for logs tab directly
       const handleLogsItemPrint = (logItem) => {
+        // Show warning message after clicking print (if BT is not connected) (Rule 3)
+        if (!bleCharacteristic || bleStatus !== "Connected to Seznik") {
+          triggerNotification("Warning: Bluetooth printer is not connected. Printing A4/System invoice only.");
+        }
+
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           const printDateFormatted = formatInvoiceDateTime(logItem.timestamp ? new Date(logItem.timestamp) : new Date());
@@ -875,15 +908,21 @@
       const suggestions = autocompleteQuery ? cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQuery.toLowerCase())).slice(0, 5) : [];
       const abhiData = (cloudBills.length > 0) ? computeAbhiMetrics() : null;
 
+      // STRICT SHEETS CUSTOMER SUGGESTIONS (Rule 3): Do not suggest or allow values if not present inside dbCustomers list
+      const filteredSheetsCustomers = customerName.trim() === "" 
+        ? [] 
+        : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
+
       return (
         <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative">
           
           {notification && (
-            <div className="bg-amber-500 text-stone-950 py-1 px-3 text-center text-[10px] font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
+            <div className="bg-amber-500 text-stone-950 py-1.5 px-3 text-center text-[10px] font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
               {notification}
             </div>
           )}
 
+          {}
           {/* Sticky Customer configurations line: MOVED TO THE ABSOLUTE TOP OF APP VIEW */}
           <div className="bg-white p-2.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm">
             <div className="flex gap-1.5 items-center font-sans">
@@ -904,9 +943,9 @@
                   onFocus={() => setShowCustSuggestions(true)}
                   className="w-full px-2 py-1.5 text-xs bg-stone-50 border rounded font-bold focus:border-stone-500 focus:outline-none"
                 />
-                {showCustSuggestions && customerName.trim() !== "" && dbCustomers.length > 0 && (
+                {showCustSuggestions && filteredSheetsCustomers.length > 0 && (
                   <div className="absolute top-full mt-1.5 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
-                    {dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase())).map((c, i) => (
+                    {filteredSheetsCustomers.map((c, i) => (
                       <div key={i} onMouseDown={() => { handleCustomerSearchAndSelect(c.name); setShowCustSuggestions(false); }} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
                         <span>{c.name}</span>
                         {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
@@ -954,6 +993,7 @@
           {/* Primary View Workspace */}
           <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2.5 flex flex-col gap-2.5 overflow-hidden bg-stone-50 no-print">
             
+            {}
             {/* Tab 1: Billing Panel */}
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-2.5 overflow-hidden">
@@ -1051,6 +1091,7 @@
               </div>
             )}
 
+            {}
             {/* Tab 2: Tally Bag */}
             {currentTab === "bag" && (
               <div className="flex-grow flex flex-col gap-2 p-2.5 bg-stone-50 overflow-hidden">
@@ -1120,6 +1161,7 @@
               </div>
             )}
 
+            {}
             {/* Tab 3: Catalog Management */}
             {currentTab === "products" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
@@ -1228,36 +1270,41 @@
                   />
                 </div>
 
+                {/* Alphabetical Product List Rendering - Sorted Alphabetically (Rule 3) */}
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll">
-                  {cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase())).map(p => (
-                    <div 
-                      key={p.id} 
-                      className={`flex justify-between items-center py-1.5 px-2 text-xs font-bold rounded cursor-pointer ${selectedCatalogProduct?.id === p.id ? 'bg-amber-100 text-stone-900' : 'hover:bg-stone-50'}`}
-                      onClick={() => setSelectedCatalogProduct(p)}
-                    >
-                      <span className="uppercase text-stone-800">{p.name}</span>
-                      <div className="flex gap-2">
-                        <button 
-                          type="button" 
-                          onClick={(e) => { e.stopPropagation(); setSelectedCatalogProduct(p); }} 
-                          className="text-indigo-500 hover:text-indigo-700 font-extrabold uppercase text-[10px]"
-                        >
-                          Merge
-                        </button>
-                        <button 
-                          type="button" 
-                          onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.id); }} 
-                          className="text-stone-300 hover:text-rose-600 transition-colors"
-                        >
-                          <i className="fa-solid fa-trash-can"></i>
-                        </button>
+                  {cloudProducts
+                    .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
+                    .sort((a, b) => a.name.localeCompare(b.name))
+                    .map(p => (
+                      <div 
+                        key={p.id} 
+                        className={`flex justify-between items-center py-1.5 px-2 text-xs font-bold rounded cursor-pointer ${selectedCatalogProduct?.id === p.id ? 'bg-amber-100 text-stone-900' : 'hover:bg-stone-50'}`}
+                        onClick={() => setSelectedCatalogProduct(p)}
+                      >
+                        <span className="uppercase text-stone-800">{p.name}</span>
+                        <div className="flex gap-2">
+                          <button 
+                            type="button" 
+                            onClick={(e) => { e.stopPropagation(); setSelectedCatalogProduct(p); }} 
+                            className="text-indigo-500 hover:text-indigo-700 font-extrabold uppercase text-[10px]"
+                          >
+                            Merge
+                          </button>
+                          <button 
+                            type="button" 
+                            onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.id); }} 
+                            className="text-stone-300 hover:text-rose-600 transition-colors"
+                          >
+                            <i className="fa-solid fa-trash-can"></i>
+                          </button>
+                        </div>
                       </div>
-                    </div>
                   ))}
                 </div>
               </div>
             )}
 
+            {}
             {/* Tab 4: Logs & Historic Audit Ledger */}
             {currentTab === "logs" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-3 flex flex-col min-h-0">
@@ -1403,7 +1450,7 @@
                           <div className="flex items-center gap-1">
                             <span className="text-emerald-600 font-sans mr-1">{b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}</span>
                             
-                            {/* FIXED Logs Print & Share Buttons: Spools directly with zero lag */}
+                            {/* Logs Print Button with automated Bluetooth Spool Alerts */}
                             <button 
                               type="button" 
                               onClick={() => handleLogsItemPrint(b)} 
@@ -1455,6 +1502,7 @@
 
           </main>
 
+          {}
           {/* Clean App-Style Tab Navigation Bar */}
           <footer className="bg-stone-900 border-t py-2 px-4 no-print flex-shrink-0 z-40 shadow-lg">
             <div className="max-w-md mx-auto flex justify-around items-center">
@@ -1499,7 +1547,7 @@
         </div>
       );
     }
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
   </script>
 </body>
 </html>
