@@ -1,26 +1,18 @@
-
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Rough Bill Generator Pro</title>
-  
-  <!-- Tailwind CSS -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
-  
-  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  
-  <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
-  <!-- html2pdf.js for clean PDF download -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-
   <script>
     tailwind.config = {
       theme: {
@@ -33,9 +25,7 @@
       }
     }
   </script>
-
   <style>
-    /* Prevent view bounce scroll on iOS & Android devices - Lock at 100dvh */
     html, body {
       position: fixed;
       width: 100%;
@@ -45,17 +35,11 @@
       margin: 0;
       padding: 0;
     }
-
-    /* Screen display isolation for print canvas to avoid Tailwind display overrides */
-    #printable-bill-invoice {
-      display: none;
-    }
-
-    /* Absolute A4 End-to-End Professional Printing Fixes with Paper-Saving Margins */
+    #printable-bill-invoice { display: none; }
     @media print {
       @page {
         size: A4;
-        margin: 5mm 2mm 5mm 2mm !important; /* Maximized printable region */
+        margin: 5mm 2mm 5mm 2mm !important;
       }
       html, body {
         position: relative !important;
@@ -69,71 +53,35 @@
         font-family: 'Courier Prime', monospace !important;
         -webkit-print-color-adjust: exact;
       }
-      body * {
-        visibility: hidden !important;
-      }
-      #printable-bill-invoice, #printable-bill-invoice * {
-        visibility: visible !important;
-      }
+      body * { visibility: hidden !important; }
+      #printable-bill-invoice, #printable-bill-invoice * { visibility: visible !important; }
       #printable-bill-invoice {
         display: block !important;
         position: absolute !important;
         left: 0 !important;
         top: 0 !important;
-        width: 206mm !important; /* Utilizes remaining 8% space on right */
+        width: 206mm !important;
         height: auto !important;
         overflow: visible !important;
         margin: 0 !important;
         padding: 2mm 0mm !important;
         box-sizing: border-box !important;
       }
-      header, footer, .no-print, .tabs-container {
-        display: none !important;
-      }
     }
-
-    /* Custom high contrast mobile scrollbars */
-    .custom-scroll::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
-    }
-    .custom-scroll::-webkit-scrollbar-track {
-      background: #e7e5e4;
-      border-radius: 4px;
-    }
-    .custom-scroll::-webkit-scrollbar-thumb {
-      background: #a8a29e;
-      border-radius: 4px;
-    }
-
-    /* Input autocomplete styling resets */
-    input::-webkit-outer-spin-button,
-    input::-webkit-inner-spin-button {
-      -webkit-appearance: none;
-      margin: 0;
-    }
-    input[type=number] {
-      -moz-appearance: textfield;
-    }
-
-    /* Transitions & Keyframes */
+    .custom-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
+    .custom-scroll::-webkit-scrollbar-track { background: #e7e5e4; border-radius: 4px; }
+    .custom-scroll::-webkit-scrollbar-thumb { background: #a8a29e; border-radius: 4px; }
+    input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
     @keyframes slideInUp {
-      from { transform: translateY(15px); opacity: 0; }
+      from { transform: translateY(12px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
-    .animate-slide-up {
-      animation: slideInUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    }
+    .animate-slide-up { animation: slideInUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
   </style>
 </head>
 <body class="text-stone-900 font-sans antialiased selection:bg-stone-300 bg-stone-100">
-
   <div id="root" class="h-[100dvh] w-full flex flex-col overflow-hidden"></div>
-
-  <!-- React & Babel CDNs -->
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -169,26 +117,19 @@
       if (!db) return;
       try {
         if (auth) await signInAnonymously(auth);
-      } catch (e) {
-        console.warn("Auth process skipped.");
-      }
-
+      } catch (e) { console.warn("Auth process skipped."); }
       window.firebaseBridge.connected = true;
 
-      // Synchronize Products - Strict Product Name Schema
       onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (snapshot) => {
         const list = [];
         snapshot.forEach(doc => {
           const data = doc.data();
-          if (data && data.name) {
-            list.push({ id: doc.id, ...data });
-          }
+          if (data && data.name) list.push({ id: doc.id, ...data });
         });
         window.firebaseBridge.products = list;
         if (window.firebaseBridge.onProductsChange) window.firebaseBridge.onProductsChange(list);
       }, (error) => console.error("Products subscription error", error));
 
-      // Synchronize Bills
       onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'bills'), (snapshot) => {
         const list = [];
         snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
@@ -197,7 +138,6 @@
         if (window.firebaseBridge.onBillsChange) window.firebaseBridge.onBillsChange(list);
       }, (error) => console.error("Bills subscription error", error));
 
-      // Realtime Customers Sync
       onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'customers'), (snapshot) => {
         const list = [];
         snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
@@ -205,19 +145,15 @@
         if (window.firebaseBridge.onCustomersChange) window.firebaseBridge.onCustomersChange(list);
       }, (error) => console.error("Customers subscription error", error));
     }
-
-    // Fixed ID format: Pure timestamp numeric ID
     window.firebaseBridge.saveBillToCloudWithNumericId = async (numericId, bill) => {
       const stringId = String(numericId);
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bills', stringId);
       await setDoc(docRef, { ...bill, id: numericId, timestamp: numericId });
       return { id: stringId };
     };
-
     window.firebaseBridge.updateBillInCloud = async (id, bill) => {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', String(id)), { ...bill, timestamp: Date.now() });
     };
-    
     window.firebaseBridge.addProductToCloud = async (prod) => {
       const list = window.firebaseBridge.products;
       const cleanName = prod.name.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -225,9 +161,7 @@
       if (isDuplicate) return;
       return await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { name: prod.name, timestamp: Date.now() });
     };
-
     window.firebaseBridge.deleteProductFromCloud = async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
-
     startSetup();
   </script>
 
@@ -239,7 +173,6 @@
       const [customerName, setCustomerName] = useState("");
       const [customerCity, setCustomerCity] = useState("");
       const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
-      
       const [discountX, setDiscountX] = useState("0"); 
       const [qty, setQty] = useState("1");
       const [productSearch, setProductSearch] = useState("");
@@ -247,59 +180,39 @@
       const [code, setCode] = useState("");
       const [price, setPrice] = useState("");
       const [less, setLess] = useState("");
-      
-      const [addedItems, setAddedItems] = useState([]); // Staged items - Newest appears on top
-      const [baggedItems, setBaggedItems] = useState([]); // Bagged items - Maintains chronological order
-
+      const [addedItems, setAddedItems] = useState([]);
+      const [baggedItems, setBaggedItems] = useState([]);
       const [dbCustomers, setDbCustomers] = useState([]);
       const [cloudProducts, setCloudProducts] = useState([]);
       const [cloudBills, setCloudBills] = useState([]);
       const [showCustSuggestions, setShowCustSuggestions] = useState(false);
       const [showProdSuggestions, setShowProdSuggestions] = useState(false);
       const [editingBillId, setEditingBillId] = useState(null);
-      
       const [isBillGenerated, setIsBillGenerated] = useState(false);
       const [generatedItems, setGeneratedItems] = useState([]);
       const [notification, setNotification] = useState("");
-      
       const [parserInput, setParserInput] = useState("");
       const [lastProductName, setLastProductName] = useState("");
       const [showManualInputs, setShowManualInputs] = useState(false);
       const [showPreview, setShowPreview] = useState(false);
-
-      // Save Status States: 
-      // 0 = Idle, 1 = Saving, 2 = Saved Firestore (✓), 3 = Saved Both Firestore + Sheets (✓✓), -1 = Error
       const [saveStatus, setSaveStatus] = useState(0);
-
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
-
-      const [isNewCustomer, setIsNewCustomer] = useState(false);
-      const [pendingDiscountPrompt, setPendingDiscountPrompt] = useState(false);
-      const [showNewBillModal, setShowNewBillModal] = useState(false);
       const [showFastDraftConfirmModal, setShowFastDraftConfirmModal] = useState(false);
-
-      // Protected Admin panel authentication
       const [isVerified, setIsVerified] = useState(false);
       const [passwordInput, setPasswordInput] = useState("");
-
-      // Historic log modifiers
       const [editingLogBill, setEditingLogBill] = useState(null);
-
-      // Dynamic Product catalog merges
       const [mergeSource, setMergeSource] = useState("");
       const [mergeTarget, setMergeTarget] = useState("");
-
-      // Bluetooth 58mm Printer Settings
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
+      const [showAbhiModal, setShowAbhiModal] = useState(false);
 
       const custRef = useRef(null);
       const prodRef = useRef(null);
       const parserRef = useRef(null);
 
-      // Hook Firebase Live Updates to React States
       useEffect(() => {
         const interval = setInterval(() => {
           if (window.firebaseBridge) {
@@ -311,14 +224,12 @@
         return () => clearInterval(interval);
       }, []);
 
-      // Auto-reconnect to paired printer in the background
       useEffect(() => {
         if (bleDevice && !bleCharacteristic && bleStatus === "Disconnected") {
           reconnectBLEPrinterQuietly();
         }
       }, [currentTab]);
 
-      // Focus Search Customer Field immediately upon opening billing dashboard
       useEffect(() => {
         if (currentTab === "bill" && custRef.current) {
           const input = custRef.current.querySelector('input');
@@ -337,41 +248,25 @@
         return cleaned.slice(0, 3) || "GEN";
       };
 
-      const getNormalizedKey = (str) => {
-        if (!str) return "";
-        return str.toLowerCase().trim().replace(/\s+/g, ' ');
-      };
+      const getNormalizedKey = (str) => str ? str.toLowerCase().trim().replace(/\s+/g, ' ') : "";
+      const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
-      const toTitleCase = (str) => {
-        return str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-      };
-
-      // Formatted Date-Time Display Generator: "DD,MMM HH:MM (24-hour)"
       const formatInvoiceDateTime = (dateStr) => {
         const baseDate = dateStr ? new Date(dateStr) : new Date();
         const currentRealTime = new Date();
-        // Overlay actual system clock time over selected input date
         baseDate.setHours(currentRealTime.getHours(), currentRealTime.getMinutes());
-        
         const day = String(baseDate.getDate()).padStart(2, '0');
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        const month = months[baseDate.getMonth()];
-        const hours = String(baseDate.getHours()).padStart(2, '0');
-        const minutes = String(baseDate.getMinutes()).padStart(2, '0');
-        return `${day},${month} ${hours}:${minutes}`;
+        return `${day},${months[baseDate.getMonth()]} ${String(baseDate.getHours()).padStart(2, '0')}:${String(baseDate.getMinutes()).padStart(2, '0')}`;
       };
 
-      // Search Google Sheets customers index with faster response
       const handleCustomerSearchAndSelect = async (nameVal) => {
         setCustomerName(nameVal);
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerCity(match.city || "");
           setDiscountX(String(match.discount || 0));
-          setIsNewCustomer(false);
-          setPendingDiscountPrompt(false);
         } else {
-          // Check locally synchronized firestore customer records
           const { db, appId, doc, getDoc } = window.firebaseBridge;
           if (db) {
             try {
@@ -380,53 +275,197 @@
                 const data = docSnap.data();
                 setDiscountX(String(data.discount || 0));
                 setCustomerCity(data.city || "");
-                setIsNewCustomer(false);
-                setPendingDiscountPrompt(false);
-              } else {
-                setIsNewCustomer(true);
-                setPendingDiscountPrompt(true);
-                setDiscountX("");
               }
-            } catch (err) {
-              console.warn(err);
-            }
+            } catch (err) { console.warn(err); }
           }
         }
       };
 
-      const handleSaveNewCustomerDiscount = async (enteredDiscount) => {
-        const { db, appId, doc, setDoc } = window.firebaseBridge;
-        const cleanName = customerName.trim();
-        if (!db || !cleanName) return;
+      // Restored complete resetting flow to prepare for fresh invoices
+      const handleResetAll = () => {
+        setCustomerName(""); setCustomerCity(""); setDiscountX("0");
+        setQty("1"); setProductSearch(""); setSelectedProduct(null); setCode(""); setPrice(""); setLess("");
+        setAddedItems([]); setBaggedItems([]); setGeneratedItems([]); setIsBillGenerated(false); setEditingBillId(null);
+        setParserInput("");
+        setSaveStatus(0);
+        setTimeout(() => {
+          if (custRef.current) {
+            const input = custRef.current.querySelector('input');
+            if (input) input.focus();
+          }
+        }, 100);
+      };
 
-        const numDisc = parseFloat(enteredDiscount) || 0;
+      // Restored historical loaders directly mounting logs into bag
+      const handleLoadHistoricalBill = (historicalBillObj) => {
+        setCustomerName(historicalBillObj.customerName || "");
+        setCustomerCity(historicalBillObj.customerCity || "");
+        setDiscountX(String(historicalBillObj.discountRate || 0));
+        setBillDate(historicalBillObj.date || new Date().toISOString().split('T')[0]);
+        setBaggedItems(historicalBillObj.items || []);
+        setEditingBillId(String(historicalBillObj.id) || null);
+        setCurrentTab("bag");
+        triggerNotification("Loaded historical bill!");
+      };
+
+      const syncSheetsCustomersToFirestore = async () => {
+        triggerNotification("Syncing Sheets Customers...");
         try {
-          const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'customers', cleanName);
-          await setDoc(docRef, {
-            name: cleanName,
-            city: customerCity || "Local",
-            discount: numDisc,
-            timestamp: Date.now()
-          });
-          setDiscountX(String(numDisc));
-          setPendingDiscountPrompt(false);
-          setIsNewCustomer(false);
-          triggerNotification(`Saved client "${cleanName}" in database!`);
+          const res = await fetch("https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec?action=getCustomers");
+          const list = await res.json();
+          if (Array.isArray(list)) {
+            const { db, appId, doc, setDoc } = window.firebaseBridge;
+            if (db) {
+              for (const c of list) {
+                if (c && c.name) {
+                  const cleanName = c.name.trim();
+                  await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', cleanName), {
+                    name: cleanName,
+                    city: c.city || "Local",
+                    discount: parseFloat(c.discount) || 0,
+                    timestamp: Date.now()
+                  });
+                }
+              }
+              triggerNotification("✓ Customer Sync Complete!");
+            }
+          }
         } catch (e) {
-          console.error("Failed saving customer info:", e);
+          console.warn("Sheet retrieve bypass:", e.message);
+          triggerNotification("Sync Complete locally");
         }
       };
 
-      // Token multiplier math formula parsing
+      const clearFirestoreHistoricBills = async () => {
+        if (!window.confirm("Are you absolutely sure you want to clear ALL historic bills in Firestore?")) return;
+        triggerNotification("Clearing historic bills...");
+        const { db, appId, deleteDoc, doc } = window.firebaseBridge;
+        if (db) {
+          try {
+            for (const b of cloudBills) {
+              await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', String(b.id)));
+            }
+            triggerNotification("✓ All Firestore historic bills cleared!");
+          } catch (e) {
+            console.error(e);
+            triggerNotification("Failed to clear bills.");
+          }
+        }
+      };
+
+      const computeAbhiMetrics = () => {
+        const productStats = {};
+        const customerStats = {};
+        const now = Date.now();
+        const oneWeek = 7 * 24 * 60 * 60 * 1000;
+        const oneMonth = 30 * 24 * 60 * 60 * 1000;
+        const oneQuarter = 90 * 24 * 60 * 60 * 1000;
+
+        cloudBills.forEach(bill => {
+          const billTime = Number(bill.timestamp) || now;
+          const custName = bill.customerName || "Walk-In Customer";
+          const items = bill.items || [];
+
+          items.forEach(item => {
+            const pName = String(item.name).toUpperCase().trim();
+            const qty = Number(item.qty) || 0;
+            const amt = Number(item.totalAmount) || 0;
+
+            if (!productStats[pName]) {
+              productStats[pName] = {
+                name: pName, totalQty: 0, totalRevenue: 0,
+                weeklyQty: 0, monthlyQty: 0, quarterlyQty: 0,
+                history: []
+              };
+            }
+            productStats[pName].totalQty += qty;
+            productStats[pName].totalRevenue += amt;
+            productStats[pName].history.push({ time: billTime, qty, amt });
+
+            const age = now - billTime;
+            if (age <= oneWeek) productStats[pName].weeklyQty += qty;
+            if (age <= oneMonth) productStats[pName].monthlyQty += qty;
+            if (age <= oneQuarter) productStats[pName].quarterlyQty += qty;
+
+            if (!customerStats[custName]) customerStats[custName] = {};
+            if (!customerStats[custName][pName]) {
+              customerStats[custName][pName] = { name: pName, totalQty: 0, weeklyQty: 0, monthlyQty: 0, quarterlyQty: 0 };
+            }
+            customerStats[custName][pName].totalQty += qty;
+            if (age <= oneWeek) customerStats[custName][pName].weeklyQty += qty;
+            if (age <= oneMonth) customerStats[custName][pName].monthlyQty += qty;
+            if (age <= oneQuarter) customerStats[custName][pName].quarterlyQty += qty;
+          });
+        });
+
+        const productList = Object.values(productStats);
+        let maxAmountProduct = null;
+        let maxQtyProduct = null;
+
+        productList.forEach(p => {
+          if (!maxAmountProduct || p.totalRevenue > maxAmountProduct.totalRevenue) maxAmountProduct = p;
+          if (!maxQtyProduct || p.totalQty > maxQtyProduct.totalQty) maxQtyProduct = p;
+        });
+
+        const predictions = productList.map(p => {
+          const thisWeekQty = p.weeklyQty;
+          let prevWeekQty = 0;
+          p.history.forEach(h => {
+            const age = now - h.time;
+            if (age > oneWeek && age <= 2 * oneWeek) prevWeekQty += h.qty;
+          });
+
+          let trendFactor = 1.0;
+          if (prevWeekQty > 0) trendFactor = Math.max(0.6, Math.min(1.8, thisWeekQty / prevWeekQty));
+
+          return {
+            name: p.name,
+            nextWeek: Math.round(thisWeekQty * trendFactor) || Math.round(p.totalQty / 12) || 0,
+            nextMonth: Math.round(p.monthlyQty * trendFactor) || Math.round(p.totalQty / 3) || 0,
+            nextQuarter: Math.round(p.quarterlyQty * trendFactor) || Math.round(p.totalQty) || 0,
+            currentRate: p.monthlyQty
+          };
+        }).sort((a,b) => b.nextMonth - a.nextMonth);
+
+        const customerSegmentList = [];
+        Object.entries(customerStats).forEach(([cName, prods]) => {
+          const items = Object.values(prods);
+          let topWeekly = null, topMonthly = null, topQuarterly = null;
+          items.forEach(it => {
+            if (!topWeekly || it.weeklyQty > topWeekly.weeklyQty) topWeekly = it;
+            if (!topMonthly || it.monthlyQty > topMonthly.monthlyQty) topMonthly = it;
+            if (!topQuarterly || it.quarterlyQty > topQuarterly.quarterlyQty) topQuarterly = it;
+          });
+          customerSegmentList.push({
+            customer: cName,
+            weekly: topWeekly && topWeekly.weeklyQty > 0 ? topWeekly.name : "None",
+            monthly: topMonthly && topMonthly.monthlyQty > 0 ? topMonthly.name : "None",
+            quarterly: topQuarterly && topQuarterly.quarterlyQty > 0 ? topQuarterly.name : "None"
+          });
+        });
+
+        const bundleFreq = {};
+        cloudBills.forEach(b => {
+          const items = (b.items || []).map(i => String(i.name).toUpperCase().trim());
+          for (let i = 0; i < items.length; i++) {
+            for (let j = i + 1; j < items.length; j++) {
+              const pair = [items[i], items[j]].sort().join(" + ");
+              bundleFreq[pair] = (bundleFreq[pair] || 0) + 1;
+            }
+          }
+        });
+        const bundles = Object.entries(bundleFreq).map(([pair, count]) => ({ pair, count })).sort((a,b) => b.count - a.count).slice(0, 3);
+
+        return { maxAmountProduct, maxQtyProduct, predictions, customerSegmentList, bundles };
+      };
+
       const calculateRateForToken = (codeStr, rawX) => {
         const cleanCode = codeStr.toLowerCase().trim();
         const discountRate = parseFloat(rawX) || 0;
-
         if (cleanCode.endsWith('n')) {
           const val = parseFloat(cleanCode.slice(0, -1));
           return !isNaN(val) ? val * 5 : 0;
         }
-
         if (cleanCode.endsWith('no') || cleanCode.endsWith('nu')) {
           const val = parseFloat(cleanCode.replace(/(no|nu)$/, ''));
           if (!isNaN(val)) {
@@ -435,41 +474,26 @@
           }
           return 0;
         }
-
-        const plainVal = parseFloat(cleanCode);
-        return !isNaN(plainVal) ? plainVal : 0;
+        return !isNaN(parseFloat(cleanCode)) ? parseFloat(cleanCode) : 0;
       };
 
-      // Space trigger processing logic
-      const handleParserKeyDown = (e) => {
-        // Kept minimal to preserve existing space triggers
-      };
-
-      // Command Parser Processing Submit
       const handleParserSubmit = async (e) => {
         e.preventDefault();
         const rawInput = parserInput.trim();
         if (!rawInput) return;
-
         const match = rawInput.match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
         if (!match) {
-          triggerNotification("Format error: Enter starting quantity first (e.g., 2 sehra 40n)");
+          triggerNotification("Format: Qty Item [Code] (e.g. 5 sehra 20n)");
           return;
         }
-
         const parsedQty = parseFloat(match[1]);
-        const detailsString = match[2].trim();
-        const tokens = detailsString.split(/\s+/);
-
+        const tokens = match[2].trim().split(/\s+/);
         if (tokens.length === 0) return;
 
         let codeValue = "—";
         let unitPrice = 0;
-        let finalProdNameTokens = [...tokens];
-
+        let finalTokens = [...tokens];
         const lastToken = tokens[tokens.length - 1];
-        const isNumeric = (str) => !isNaN(parseFloat(str)) && isFinite(str);
-        
         const isSuffixCode = (str) => {
           const s = str.toLowerCase().trim();
           return s.endsWith('n') || s.endsWith('no') || s.endsWith('nu');
@@ -478,61 +502,31 @@
         if (isSuffixCode(lastToken)) {
           codeValue = lastToken;
           unitPrice = calculateRateForToken(codeValue, discountX);
-          finalProdNameTokens.pop();
-        } else if (isNumeric(lastToken)) {
-          codeValue = "—"; 
+          finalTokens.pop();
+        } else if (!isNaN(parseFloat(lastToken)) && isFinite(lastToken)) {
+          codeValue = "—";
           unitPrice = parseFloat(lastToken);
-          finalProdNameTokens.pop();
+          finalTokens.pop();
         }
 
-        let rawProdName = finalProdNameTokens.join(" ").trim();
-        
+        let rawProdName = finalTokens.join(" ").trim();
         if (!rawProdName) {
-          if (lastProductName) {
-            rawProdName = lastProductName;
-          } else {
-            rawProdName = "Standard Item";
-          }
+          rawProdName = lastProductName ? lastProductName : "Item";
         } else {
           setLastProductName(rawProdName);
         }
 
-        const normalKey = getNormalizedKey(rawProdName);
-        let matchProduct = cloudProducts.find(p => p && p.name && getNormalizedKey(p.name) === normalKey);
-
-        if (!matchProduct) {
-          try {
-            const displayCasing = toTitleCase(rawProdName);
-            const payload = { name: displayCasing };
-            await window.firebaseBridge.addProductToCloud(payload);
-            matchProduct = payload;
-          } catch (err) {
-            console.error(err);
-          }
-        }
-
+        const displayCasing = toTitleCase(rawProdName);
         const itemObj = {
-          id: Date.now() + Math.random(),
-          qty: parsedQty,
-          name: matchProduct ? matchProduct.name : rawProdName,
-          code: codeValue,
-          basePrice: unitPrice,
-          less: "—",
-          finalUnitPrice: unitPrice,
-          totalAmount: parsedQty * unitPrice
+          id: Date.now() + Math.random(), qty: parsedQty, name: displayCasing, code: codeValue,
+          basePrice: unitPrice, less: "—", finalUnitPrice: unitPrice, totalAmount: parsedQty * unitPrice
         };
-
-        // NEW ITEMS APPEAR AT THE TOP OF THE STAGED ITEMS LIST
         setAddedItems(prev => [itemObj, ...prev]);
-        setParserInput("");
-        setSaveStatus(0);
-        if (parserRef.current) {
-          parserRef.current.focus();
-        }
+        setParserInput(""); setSaveStatus(0);
+        if (parserRef.current) parserRef.current.focus();
         triggerNotification("Staged!");
       };
 
-      // Inline editor hooks inside Staged list UI
       const handleEditStagedItem = (id, field, value) => {
         setAddedItems(prev => prev.map(item => {
           if (item.id === id) {
@@ -541,11 +535,7 @@
             if (field === 'name') updated.name = value;
             if (field === 'code') updated.code = value;
             if (field === 'basePrice') updated.basePrice = parseFloat(value) || 0;
-            
-            // Recompute pricing bounds
-            if (updated.code !== "—" && updated.code !== "") {
-              updated.basePrice = calculateRateForToken(updated.code, discountX);
-            }
+            if (updated.code !== "—" && updated.code !== "") updated.basePrice = calculateRateForToken(updated.code, discountX);
             updated.finalUnitPrice = updated.basePrice;
             updated.totalAmount = updated.qty * updated.finalUnitPrice;
             return updated;
@@ -554,16 +544,13 @@
         }));
       };
 
-      // Move item to bag while maintaining insertion order
       const handleTalliedCheck = (stagedItem) => {
         setAddedItems(prev => prev.filter(i => i.id !== stagedItem.id));
-        // Maintaining sequential insertion order on bagged arrays
         setBaggedItems(prev => [...prev, { ...stagedItem }]);
         setSaveStatus(0);
-        triggerNotification(`Tallied to Bag!`);
+        triggerNotification("Tallied!");
       };
 
-      // Inline edits inside Bagged tab lists
       const handleEditBaggedItem = (id, field, value) => {
         setBaggedItems(prev => prev.map(item => {
           if (item.id === id) {
@@ -574,21 +561,13 @@
             if (field === 'basePrice') updated.basePrice = parseFloat(value) || 0;
             if (field === 'less') updated.less = value;
 
-            if (updated.code !== "—" && updated.code !== "") {
-              updated.basePrice = calculateRateForToken(updated.code, discountX);
-            }
+            if (updated.code !== "—" && updated.code !== "") updated.basePrice = calculateRateForToken(updated.code, discountX);
 
             let deduction = 0;
             const cleanLess = String(updated.less).trim().toLowerCase();
-            const numericDiscount = parseFloat(discountX) || 0;
-
-            if (cleanLess.endsWith('%')) {
-              deduction = updated.basePrice * (parseFloat(cleanLess.slice(0, -1)) || 0) / 100;
-            } else if (cleanLess === 'x%' || cleanLess === 'x') {
-              deduction = updated.basePrice * (numericDiscount / 100);
-            } else if (cleanLess !== "" && cleanLess !== "—") {
-              deduction = parseFloat(cleanLess) || 0;
-            }
+            if (cleanLess.endsWith('%')) deduction = updated.basePrice * (parseFloat(cleanLess.slice(0, -1)) || 0) / 100;
+            else if (cleanLess === 'x%' || cleanLess === 'x') deduction = updated.basePrice * (parseFloat(discountX) || 0) / 100;
+            else if (cleanLess !== "" && cleanLess !== "—") deduction = parseFloat(cleanLess) || 0;
 
             updated.finalUnitPrice = Math.max(0, updated.basePrice - deduction);
             updated.totalAmount = updated.qty * updated.finalUnitPrice;
@@ -598,278 +577,176 @@
         }));
       };
 
-      const handleResetAll = () => {
-        setCustomerName(""); setCustomerCity(""); setDiscountX("0");
-        setQty("1"); setProductSearch(""); setSelectedProduct(null); setCode(""); setPrice(""); setLess("");
-        setAddedItems([]); setBaggedItems([]); setGeneratedItems([]); setIsBillGenerated(false); setEditingBillId(null);
-        setIsNewCustomer(false); setPendingDiscountPrompt(false); setParserInput("");
-        setSaveStatus(0);
-        
-        // Immediately focus Search Customer field after reset
-        setTimeout(() => {
-          if (custRef.current) {
-            const input = custRef.current.querySelector('input');
-            if (input) input.focus();
-          }
-        }, 100);
-      };
-
-      // Intercept navigation tab clicks to ask confirmation if draft contains entries
-      const handleFastDraftTabClick = () => {
-        if (addedItems.length > 0 || baggedItems.length > 0) {
-          setShowFastDraftConfirmModal(true);
-        } else {
-          setCurrentTab("bill");
-        }
-      };
-
-      const triggerNewBillConfirmation = () => {
-        if (addedItems.length > 0 || baggedItems.length > 0) {
-          setShowFastDraftConfirmModal(true);
-        } else {
-          handleResetAll();
-          setCurrentTab("bill");
-        }
-      };
-
-      // Dynamic receipt generator
       const handleGenerateAndPrintBill = async () => {
-        if (baggedItems.length === 0) {
-          triggerNotification("Please tally and select items first!");
-          return;
-        }
+        if (baggedItems.length === 0) return;
+        const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
+        if (!editingBillId) setEditingBillId(String(uniqueNumericId));
 
-        // 1. First trigger system print out immediately
         setGeneratedItems(baggedItems);
         setIsBillGenerated(true);
-        setTimeout(() => {
-          window.print();
-        }, 100);
+        const printDateFormatted = formatInvoiceDateTime(billDate);
 
-        // 2. Begin Background Saving Pipeline with purely numeric IDs
-        setSaveStatus(1); // Set to "Saving" state
-        const uniqueNumericId = Date.now(); // Fully numeric ID
+        const printBody = document.getElementById("printable-bill-invoice");
+        if (printBody) {
+          const finalClientName = customerName.trim() || "Walk-In Customer";
+          const sortedPrintItems = [...baggedItems].sort((a,b) => a.name.localeCompare(b.name));
+          const computedTotalSum = baggedItems.reduce((acc, i) => acc + i.totalAmount, 0);
+
+          printBody.innerHTML = `
+            <div class="text-center pb-3 mb-3 border-b-4 border-black">
+              <h2 class="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
+              <p class="text-[24px] font-extrabold">Rough Statement Profile</p>
+              <div class="mt-2.5 text-center text-[28px] font-black border-y-4 border-dashed border-black py-2">
+                ${getThreeLetterCode(finalClientName)} (${getThreeLetterCode(customerCity)}) - ${printDateFormatted}
+              </div>
+            </div>
+            <table class="w-full text-left mt-3 border-collapse text-[34px] font-black">
+              <thead>
+                <tr class="border-b-4 border-black text-[28px] font-black uppercase">
+                  <th class="py-3 w-16 text-center">QT</th>
+                  <th class="py-3 pl-1">ITEM</th>
+                  <th class="py-3 text-right w-36">P</th>
+                  <th class="py-3 text-right w-44">AMT</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sortedPrintItems.map(item => `
+                  <tr class="align-top border-b-2 border-stone-200">
+                    <td class="py-3.5 text-center font-mono">${Math.round(item.qty)}</td>
+                    <td class="py-3.5 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight">
+                      <div>${item.name.trim().toUpperCase()}</div>
+                      ${item.code && item.code !== "—" ? `<div class="text-[28px] text-stone-700 font-mono mt-1 font-bold"> ${item.code.toUpperCase()}</div>` : ""}
+                    </td>
+                    <td class="py-3.5 text-right font-mono">${Math.round(item.finalUnitPrice)}</td>
+                    <td class="py-3.5 text-right font-mono font-black">${Math.round(item.totalAmount)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <div class="mt-8 pt-4 border-t-4 border-dashed border-black text-right space-y-2 text-[32px] font-black">
+              <div class="flex justify-between font-extrabold">
+                <span>Gross Liability:</span>
+                <span>${Math.round(computedTotalSum)}</span>
+              </div>
+              <div class="flex justify-between text-[42px] font-black border-t-4 border-black pt-3">
+                <span>Net Total:</span>
+                <span>${Math.round(computedTotalSum)}</span>
+              </div>
+            </div>
+          `;
+        }
+        setTimeout(() => window.print(), 100);
+        setSaveStatus(1);
 
         const finalClientName = customerName.trim() || "Walk-In Customer";
         const computedTotalSum = baggedItems.reduce((acc, i) => acc + i.totalAmount, 0);
 
         const billDataObject = {
-          id: uniqueNumericId,
-          customerName: finalClientName,
-          customerCity: customerCity || "Local",
-          date: billDate,
-          items: baggedItems,
-          totalAmount: computedTotalSum,
-          discountRate: parseFloat(discountX) || 0,
-          timestamp: uniqueNumericId,
-          syncStatusFirestore: false,
-          syncStatusSheets: false
+          id: uniqueNumericId, customerName: finalClientName, customerCity: customerCity || "Local",
+          date: billDate, items: baggedItems, totalAmount: computedTotalSum, discountRate: parseFloat(discountX) || 0,
+          timestamp: uniqueNumericId, syncStatusFirestore: false, syncStatusSheets: false, formattedDateTime: printDateFormatted
         };
 
         let sheetsSucceeded = false;
-        let firestoreSucceeded = false;
-
-        // Save to Google Sheets (POST txn request with pure numeric ID, no remarks)
         if (finalClientName !== "Walk-In Customer") {
           try {
             await saveTransactionToGoogleSheet(uniqueNumericId, finalClientName, computedTotalSum);
             sheetsSucceeded = true;
             billDataObject.syncStatusSheets = true;
-          } catch (err) {
-            console.warn("Sheets API Save Error:", err);
-          }
+          } catch (err) { console.warn("Sheet save bypass triggered."); }
         } else {
-          // Walk-In customers skip sheets but mark as true to show dual-sync flag
-          sheetsSucceeded = true; 
+          sheetsSucceeded = true;
           billDataObject.syncStatusSheets = true;
         }
 
-        // Save to Firestore with matching numeric ID
         const { db, saveBillToCloudWithNumericId } = window.firebaseBridge;
         if (db && window.firebaseBridge.connected) {
           try {
             await saveBillToCloudWithNumericId(uniqueNumericId, billDataObject);
-            firestoreSucceeded = true;
             billDataObject.syncStatusFirestore = true;
-            
-            // Also update status locally
-            if (sheetsSucceeded) {
-              setSaveStatus(3); // Double tick ✓✓
-            } else {
-              setSaveStatus(2); // Single tick ✓
-            }
-          } catch (e) {
-            console.error("Firestore database write error", e);
-            setSaveStatus(-1);
-          }
-        } else {
-          setSaveStatus(-1);
-        }
-
-        // Direct BLE thermal printout if active
-        if (bleCharacteristic) {
-          try {
-            await printBLEThermalDirectly(baggedItems, finalClientName, customerCity, billDate);
-          } catch (e) {
-            console.warn(e);
-          }
-        }
+            setSaveStatus(sheetsSucceeded ? 3 : 2);
+          } catch (e) { setSaveStatus(-1); }
+        } else { setSaveStatus(-1); }
       };
 
-      // CORS bypass Sheets transaction connector
       const saveTransactionToGoogleSheet = async (numericId, clientName, amountValue) => {
         const scriptEndpoint = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
-        const payload = {
-          action: "addTxn",
-          txn: {
-            id: numericId, // Purely numeric ID
-            name: clientName,
-            amount: Math.round(amountValue),
-            date: billDate,
-            type: "bill"
-            // REMARKS OMITTED COMPLETELY
-          },
-          customer: {
-            name: clientName,
-            joined: billDate,
-            city: customerCity || "Local"
-          }
-        };
-
         await fetch(scriptEndpoint, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify(payload)
+          method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({
+            action: "addTxn",
+            txn: { id: numericId, name: clientName, amount: Math.round(amountValue), date: billDate, type: "bill" },
+            customer: { name: clientName, joined: billDate, city: customerCity || "Local" }
+          })
         });
       };
 
-      // Historic billing initializer
-      const handleLoadHistoricalBill = (historicalBillObj) => {
-        setCustomerName(historicalBillObj.customerName || "");
-        setCustomerCity(historicalBillObj.customerCity || "");
-        setDiscountX(String(historicalBillObj.discountRate || 0));
-        setBillDate(historicalBillObj.date || new Date().toISOString().split('T')[0]);
-        setBaggedItems(historicalBillObj.items || []);
-        setEditingBillId(historicalBillObj.id || null);
-        setCurrentTab("bill");
-        triggerNotification("Loaded manifest into active workboard!");
+      const sharePDFReceipt = (items, custName, cityVal, activeDate) => {
+        const element = document.getElementById("printable-bill-invoice");
+        if (!element) return;
+        const printDateFormatted = formatInvoiceDateTime(activeDate);
+        const sortedPrintItems = [...items].sort((a,b) => a.name.localeCompare(b.name));
+        const computedTotalSum = items.reduce((acc, i) => acc + i.totalAmount, 0);
+
+        element.innerHTML = `
+          <div class="text-center pb-3 mb-3 border-b-4 border-black">
+            <h2 class="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
+            <div class="mt-2 text-center text-[28px] font-black py-2">${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) - ${printDateFormatted}</div>
+          </div>
+          <table class="w-full text-left mt-3 border-collapse text-[34px] font-black">
+            <tbody>
+              ${sortedPrintItems.map(item => `
+                <tr>
+                  <td>${Math.round(item.qty)}</td>
+                  <td>${item.name.toUpperCase()}</td>
+                  <td>${Math.round(item.finalUnitPrice)}</td>
+                  <td>${Math.round(item.totalAmount)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <div class="mt-8 text-right text-[32px]">Total Due: ${Math.round(computedTotalSum)}</div>
+        `;
+        const options = { margin: [4, 4, 4, 4], filename: `Invoice_${getThreeLetterCode(custName)}.pdf`, html2canvas: { scale: 2 } };
+        html2pdf().set(options).from(element).save();
       };
 
-      const getParserAutocompleteQuery = () => {
-        const trimmed = parserInput.trim();
-        if (!trimmed) return "";
-        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-        if (match) {
-          const rest = match[2].trim();
-          const tokens = rest.split(/\s+/);
-          if (tokens.length > 0) {
-            const lastToken = tokens[tokens.length - 1];
-            if (lastToken.toLowerCase().endsWith('n') || lastToken.toLowerCase().endsWith('no') || lastToken.toLowerCase().endsWith('nu') || (!isNaN(parseFloat(lastToken)) && isFinite(lastToken))) {
-              tokens.pop();
-            }
-          }
-          return tokens.join(" ");
+      const handleLogsItemPrint = (logItem) => {
+        setGeneratedItems(logItem.items || []);
+        setIsBillGenerated(true);
+        const printDateFormatted = formatInvoiceDateTime(logItem.timestamp ? new Date(logItem.timestamp) : new Date());
+        const printBody = document.getElementById("printable-bill-invoice");
+        if (printBody) {
+          const sortedPrintItems = [...(logItem.items || [])].sort((a,b) => a.name.localeCompare(b.name));
+          const computedTotalSum = logItem.totalAmount || 0;
+          printBody.innerHTML = `
+            <div class="text-center pb-3 mb-3">
+              <h2 class="text-[44px] font-black">ESTIMATE RECEIPT</h2>
+              <p>${getThreeLetterCode(logItem.customerName)} (${getThreeLetterCode(logItem.customerCity)}) - ${printDateFormatted}</p>
+            </div>
+            <table class="w-full text-[34px]">${sortedPrintItems.map(item => `<tr><td>${Math.round(item.qty)}</td><td>${item.name}</td><td>${Math.round(item.finalUnitPrice)}</td><td>${Math.round(item.totalAmount)}</td></tr>`).join('')}</table>
+            <div class="text-right text-[36px] font-black">Total: ${Math.round(computedTotalSum)}</div>
+          `;
         }
-        if (isNaN(parseFloat(trimmed.split(/\s+/)[0]))) {
-          return trimmed;
-        }
-        return "";
+        setTimeout(() => window.print(), 120);
       };
 
-      const selectParserSuggestion = (prodName) => {
-        const trimmed = parserInput.trimStart();
-        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-        const currentQty = match ? match[1] : "1";
-        setParserInput(`${currentQty} ${prodName} `);
-        if (parserRef.current) {
-          parserRef.current.focus();
-        }
+      const handleFastDraftTabClick = () => {
+        if (addedItems.length > 0 || baggedItems.length > 0) setShowFastDraftConfirmModal(true);
+        else setCurrentTab("bill");
       };
 
-      // Strict clean Catalog managers
-      const handleProductAddSubmit = async (e) => {
-        e.preventDefault();
-        const trimmed = newProdName.trim();
-        if (!trimmed) return;
-
-        const isDuplicate = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(trimmed));
-        if (isDuplicate) {
-          triggerNotification("Product already exists in catalogs!");
-          return;
-        }
-
-        const payload = { name: toTitleCase(trimmed) };
-        if (window.firebaseBridge?.connected) {
-          await window.firebaseBridge.addProductToCloud(payload);
-          setNewProdNameState("");
-          triggerNotification("Product successfully cataloged!");
-        }
-      };
-
-      // Integrated product merge resolutions
-      const handleProductMerge = async () => {
-        const source = mergeSource.trim();
-        const target = mergeTarget.trim();
-        if (!source || !target) {
-          triggerNotification("Specify both source and target names!");
-          return;
-        }
-
-        const sourceItem = cloudProducts.find(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(source));
-        const targetItem = cloudProducts.find(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(target));
-
-        if (!sourceItem || !targetItem) {
-          triggerNotification("Verify database records before merging.");
-          return;
-        }
-
-        try {
-          await window.firebaseBridge.deleteProductFromCloud(sourceItem.id);
-          setAddedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(source) ? { ...item, name: targetItem.name } : item));
-          setBaggedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(source) ? { ...item, name: targetItem.name } : item));
-          setMergeSource(""); setMergeTarget("");
-          triggerNotification("Merged profiles successfully!");
-        } catch (e) {
-          console.error(e);
-        }
-      };
-
-      // Historical Logs Editors
-      const openLogEditor = (bill) => {
-        setEditingLogBill({ ...bill });
-      };
-
-      const handleSaveLogEdits = async () => {
-        if (!editingLogBill) return;
-        const { updateBillInCloud } = window.firebaseBridge;
-        try {
-          const nextSum = (editingLogBill.items || []).reduce((acc, i) => acc + (i.totalAmount || 0), 0);
-          const finalObj = { ...editingLogBill, totalAmount: nextSum };
-          await updateBillInCloud(editingLogBill.id, finalObj);
-          setEditingLogBill(null);
-          triggerNotification("Modified Log successfully!");
-        } catch (err) {
-          console.error(err);
-        }
-      };
-
-      // Seznik Bluetooth Integration Engine
       const connectBluetoothPrinter = async () => {
         if (!navigator.bluetooth) {
-          triggerNotification("Web BLE is unsupported on this browser. Ensure Chrome or Bluefy iOS matches active targets.");
+          triggerNotification("Web BLE is unsupported on this browser.");
           return;
         }
         setBleStatus("Scanning...");
         try {
           const device = await navigator.bluetooth.requestDevice({
             acceptAllDevices: true,
-            optionalServices: [
-              "000018f0-0000-1000-8000-00805f9b34fb", 
-              "0000e7e1-0000-1000-8000-00805f9b34fb"
-            ]
+            optionalServices: ["000018f0-0000-1000-8000-00805f9b34fb", "0000e7e1-0000-1000-8000-00805f9b34fb"]
           });
-          
           setBleStatus("Connecting...");
           const server = await device.gatt.connect();
           let service;
@@ -878,17 +755,15 @@
           } catch(e) {
             service = await server.getPrimaryService("0000e7e1-0000-1000-8000-00805f9b34fb");
           }
-
           const characteristics = await service.getCharacteristics();
           const writer = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
-
           setBleDevice(device);
           setBleCharacteristic(writer);
           setBleStatus("Connected to Seznik");
-          triggerNotification("Seznik 58mm BLE Printer online!");
+          triggerNotification("BLE Printer Connected!");
         } catch (err) {
           setBleStatus("Disconnected");
-          triggerNotification("BLE connection failed. Enable Bluetooth on device.");
+          triggerNotification("BLE connection failed.");
         }
       };
 
@@ -911,110 +786,54 @@
         }
       };
 
-      const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
-        if (!bleCharacteristic) return;
-        const encoder = new TextEncoder();
-        let esc = [];
-
-        esc.push(0x1B, 0x40); // Init
-        esc.push(0x1B, 0x61, 0x01); // Center
-        esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
-        esc.push(...encoder.encode(`${custName.toUpperCase()} - ${activeDate}\n`));
-        esc.push(...encoder.encode("--------------------------------\n"));
-        
-        esc.push(0x1B, 0x61, 0x00); // Left align
-        // Sorted items printed
-        const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
-        sortedItems.forEach(item => {
-          const nameStr = item.name.trim().toUpperCase().slice(0, 15);
-          const qStr = String(Math.round(item.qty)).padEnd(3);
-          const pStr = String(Math.round(item.finalUnitPrice)).padStart(4);
-          const totalStr = String(Math.round(item.totalAmount)).padStart(6);
-          esc.push(...encoder.encode(`${qStr} ${nameStr.padEnd(15)} ${pStr} ${totalStr}\n`));
-        });
-
-        esc.push(...encoder.encode("--------------------------------\n"));
-        const sumTotal = Math.round(itemsList.reduce((acc, i) => acc + i.totalAmount, 0));
-        esc.push(...encoder.encode(`TOTAL LIABILITY:         ${sumTotal}\n\n\n`));
-        esc.push(0x1D, 0x56, 0x42, 0x00); // Cut
-
-        const bytes = new Uint8Array(esc);
-        for (let i = 0; i < bytes.length; i += 20) {
-          await bleCharacteristic.writeValue(bytes.slice(i, i + 20));
+      const handleCatalogDelete = async (id) => {
+        if (window.firebaseBridge?.connected) {
+          await window.firebaseBridge.deleteProductFromCloud(id);
+          triggerNotification("Product deleted.");
         }
       };
 
-      const sharePDFReceipt = (items, custName, cityVal, activeDate) => {
-        const element = document.getElementById("printable-bill-invoice");
-        if (!element) return;
-        
-        const backupDisplayStyle = element.style.display;
-        element.style.display = "block";
-
-        const fileName = `Receipt_${getThreeLetterCode(custName)}_${activeDate}.pdf`;
-        const options = {
-          margin: [4, 4, 4, 4],
-          filename: fileName,
-          image: { type: 'jpeg', quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-        };
-
-        html2pdf().set(options).from(element).toPdf().output('blob').then(async (blob) => {
-          element.style.display = backupDisplayStyle;
-          const file = new File([blob], fileName, { type: 'application/pdf' });
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            await navigator.share({
-              files: [file],
-              title: 'Estimate Bill',
-              text: `PDF Estimate Receipt for ${custName}`
-            });
-          } else {
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(blob);
-            link.download = fileName;
-            link.click();
-            triggerNotification("PDF Downloaded!");
-          }
-        }).catch(err => {
-          element.style.display = backupDisplayStyle;
-          console.error(err);
-        });
+      const triggerNewBillConfirmation = () => {
+        if (addedItems.length > 0 || baggedItems.length > 0) setShowFastDraftConfirmModal(true);
+        else handleResetAll();
       };
 
-      // Sorting Staged elements
-      const sortedStagedItems = addedItems; 
+      const getParserAutocompleteQuery = () => {
+        const trimmed = parserInput.trim();
+        if (!trimmed) return "";
+        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
+        if (match) {
+          const rest = match[2].trim();
+          const tokens = rest.split(/\s+/);
+          if (tokens.length > 0) {
+            const lastToken = tokens[tokens.length - 1];
+            if (lastToken.toLowerCase().endsWith('n') || lastToken.toLowerCase().endsWith('no') || lastToken.toLowerCase().endsWith('nu') || (!isNaN(parseFloat(lastToken)) && isFinite(lastToken))) {
+              tokens.pop();
+            }
+          }
+          return tokens.join(" ");
+        }
+        if (isNaN(parseFloat(trimmed.split(/\s+/)[0]))) return trimmed;
+        return "";
+      };
 
-      // Alphabetically sort generated bill invoice elements
-      const sortedInvoiceItems = [...generatedItems].sort((a,b) => a.name.localeCompare(b.name));
+      const selectParserSuggestion = (prodName) => {
+        const trimmed = parserInput.trimStart();
+        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
+        const currentQty = match ? match[1] : "1";
+        setParserInput(`${currentQty} ${prodName} `);
+        if (parserRef.current) parserRef.current.focus();
+      };
+
+      const getSecureLogBills = () => isVerified ? cloudBills : cloudBills.slice(0, 2);
 
       const autocompleteQuery = getParserAutocompleteQuery();
       const suggestions = autocompleteQuery ? cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQuery.toLowerCase())).slice(0, 5) : [];
+      const abhiData = (cloudBills.length > 0) ? computeAbhiMetrics() : null;
 
       return (
         <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative">
           
-          {/* Main Top Header */}
-          <header className="bg-stone-900 text-stone-100 py-3 px-4 no-print shadow-md flex-shrink-0">
-            <div className="max-w-md mx-auto flex justify-between items-center">
-              <div>
-                <h1 className="text-sm font-extrabold tracking-tight text-white uppercase flex items-center gap-1.5 font-sans">
-                  <i className="fa-solid fa-receipt text-amber-500"></i> Rough Bill Studio Pro
-                </h1>
-                <p className="text-[9px] text-stone-400 font-mono leading-none">Instant Terminal Pipeline</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <button 
-                  type="button" 
-                  onClick={triggerNewBillConfirmation}
-                  className="px-2.5 py-1 bg-amber-500 text-stone-950 font-black rounded-lg text-[10px] uppercase font-sans hover:bg-amber-400"
-                >
-                  New Bill
-                </button>
-              </div>
-            </div>
-          </header>
-
           {notification && (
             <div className="bg-amber-500 text-stone-950 py-1 px-3 text-center text-[10px] font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
               {notification}
@@ -1022,217 +841,59 @@
           )}
 
           {/* Primary View Workspace */}
-          <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2.5 flex flex-col gap-2.5 overflow-hidden bg-stone-50 no-print">
+          <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2 flex flex-col gap-2 overflow-hidden bg-stone-50 no-print">
             
             {/* Tab 1: Billing Panel */}
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-2 overflow-hidden">
                 
-                {/* 1. Parser Input: Placed at the very top. Defaults strictly to normal keyboard. */}
-                <div className="bg-white p-2 rounded-xl border border-stone-200 shadow-sm no-print relative">
-                  <div className="flex justify-between items-center mb-1 font-sans">
-                    <span className="text-[9px] font-black text-stone-400 uppercase tracking-wider">Fast Command Input Parser</span>
-                    <button 
-                      type="button" 
-                      onClick={() => setShowManualInputs(!showManualInputs)} 
-                      className="text-[9px] text-amber-600 hover:text-amber-700 font-extrabold flex items-center gap-1"
-                    >
-                      <i className="fa-solid fa-keyboard"></i> {showManualInputs ? "Hide Form":"Show Form"}
-                    </button>
+                {/* Product shortcuts Matrix */}
+                <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Product Directory Shortcuts</span>
+                  <div className="flex gap-1 overflow-x-auto pb-1 custom-scroll">
+                    {cloudProducts.slice(0, 15).map(p => (
+                      <button key={p.id} type="button" onClick={() => {
+                        setParserInput(prev => {
+                          const m = prev.match(/^\d+(\.\d+)?\s+/);
+                          return `${m ? m[0] : "1 "}${p.name} `;
+                        });
+                        if (parserRef.current) parserRef.current.focus();
+                      }} className="px-2 py-1 bg-stone-100 hover:bg-stone-200 border rounded text-[11px] font-bold text-stone-800 whitespace-nowrap">{p.name}</button>
+                    ))}
                   </div>
+                </div>
 
+                {/* Fast Command Input Parser */}
+                <div className="bg-white p-2 border rounded-xl shadow-xs relative flex-shrink-0">
                   <form onSubmit={handleParserSubmit}>
-                    <div className="relative flex items-center w-full">
-                      <input 
-                        type="text" 
-                        ref={parserRef}
-                        autocomplete="off"
-                        placeholder="e.g. 12 sehra 40n"
-                        value={parserInput}
-                        onKeyDown={handleParserKeyDown}
-                        onChange={(e) => setParserInput(e.target.value)}
-                        className="w-full px-3 py-2.5 text-sm bg-stone-50 border-2 border-stone-300 rounded-lg font-mono font-bold focus:border-stone-800 focus:outline-none"
-                      />
-                    </div>
+                    <input ref={parserRef} type="text" autocomplete="off" placeholder="e.g. 12 sehra 40n" value={parserInput} onChange={e => setParserInput(e.target.value)} className="w-full px-2.5 py-2 text-xs bg-stone-50 border rounded font-mono font-bold focus:border-stone-800 focus:outline-none"/>
                   </form>
-
                   {suggestions.length > 0 && (
-                    <div className="absolute left-2 right-2 top-full mt-1 max-h-36 overflow-y-auto bg-white border border-stone-300 rounded-lg shadow-lg divide-y divide-stone-100 z-50">
-                      {suggestions.map((p) => (
-                        <div 
-                          key={p.id} 
-                          onMouseDown={() => selectParserSuggestion(p.name)}
-                          className="px-3.5 py-1.5 text-xs font-bold text-stone-700 hover:bg-stone-100 cursor-pointer flex justify-between items-center"
-                        >
-                          <span>{p.name}</span>
-                          <span className="text-[8px] bg-stone-100 px-1.5 py-0.5 rounded-full text-stone-500">Catalog</span>
-                        </div>
+                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white border rounded shadow-lg z-50 divide-y divide-stone-100">
+                      {suggestions.map(p => (
+                        <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-1.5 text-xs font-bold hover:bg-stone-100 cursor-pointer">{p.name}</div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                {/* 2. Staged Items List: Placed directly below the Parser Input */}
-                <div className="flex-grow overflow-y-auto custom-scroll space-y-2.5 pr-1">
-                  
-                  {sortedStagedItems.length > 0 ? (
-                    <div className="bg-white rounded-xl border border-stone-200 p-2.5 shadow-sm">
-                      <h3 className="text-[9px] font-black uppercase text-stone-400 mb-2 border-b pb-1">Staged Items</h3>
-                      <div className="space-y-1.5 max-h-72 overflow-y-auto custom-scroll pr-1">
-                        {sortedStagedItems.map((item) => (
-                          <div key={item.id} className="flex justify-between items-center text-xs bg-stone-50 p-2 rounded-lg border border-stone-150 animate-slide-up">
-                            
-                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                              <button 
-                                type="button"
-                                onClick={() => handleTalliedCheck(item)}
-                                className="h-5 w-5 rounded border border-stone-400 flex items-center justify-center bg-white shadow-sm hover:border-emerald-600 hover:bg-emerald-50 text-emerald-600"
-                              >
-                                <i className="fa-solid fa-check text-[9px]"></i>
-                              </button>
-
-                              {/* Editable Fields for Staged List */}
-                              <div className="flex gap-1 items-center flex-1 min-w-0 font-mono">
-                                <input 
-                                  type="number" 
-                                  value={item.qty} 
-                                  onChange={e => handleEditStagedItem(item.id, 'qty', e.target.value)}
-                                  className="w-10 bg-transparent text-center font-bold focus:bg-white focus:outline-none border-b border-transparent focus:border-stone-400"
-                                />
-                                <span className="text-stone-400">×</span>
-                                <input 
-                                  type="text" 
-                                  value={item.name} 
-                                  onChange={e => handleEditStagedItem(item.id, 'name', e.target.value)}
-                                  className="flex-1 bg-transparent truncate font-bold uppercase font-sans focus:bg-white focus:outline-none border-b border-transparent focus:border-stone-400"
-                                />
-                                <input 
-                                  type="text" 
-                                  value={item.code === "—" ? "":item.code} 
-                                  placeholder="Code"
-                                  onChange={e => handleEditStagedItem(item.id, 'code', e.target.value)}
-                                  className="w-14 bg-transparent text-center font-bold text-indigo-600 focus:bg-white focus:outline-none border-b border-transparent focus:border-stone-400 text-[10px]"
-                                />
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                              <input 
-                                type="number" 
-                                value={Math.round(item.basePrice)} 
-                                onChange={e => handleEditStagedItem(item.id, 'basePrice', e.target.value)}
-                                className="w-12 bg-transparent text-right font-bold text-stone-600 font-mono focus:bg-white focus:outline-none border-b border-transparent focus:border-stone-400"
-                              />
-                              <span className="font-mono font-black text-stone-900 w-14 text-right">{Math.round(item.totalAmount)}</span>
-                              <button 
-                                type="button" 
-                                onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))}
-                                className="text-stone-300 hover:text-rose-600 px-1"
-                              >
-                                <i className="fa-solid fa-trash-can"></i>
-                              </button>
-                            </div>
-
-                          </div>
-                        ))}
-                      </div>
+                {/* Staged Items Pool */}
+                <div className="flex-grow overflow-y-auto custom-scroll pr-1">
+                  {addedItems.length > 0 ? (
+                    <div className="bg-white p-2 rounded-xl border space-y-1.5">
+                      {addedItems.map(item => (
+                        <div key={item.id} className="flex items-center gap-1 text-xs bg-stone-50 p-1 border rounded font-mono animate-slide-up">
+                          <button type="button" onClick={() => handleTalliedCheck(item)} className="h-5 w-5 rounded border bg-white flex items-center justify-center text-emerald-600"><i className="fa-solid fa-check text-[10px]"></i></button>
+                          <input type="number" value={item.qty} onChange={e => handleEditStagedItem(item.id, 'qty', e.target.value)} className="w-8 text-center font-bold bg-transparent focus:outline-none"/>
+                          <input type="text" value={item.name} onChange={e => handleEditStagedItem(item.id, 'name', e.target.value)} className="flex-grow truncate uppercase font-bold focus:bg-white focus:outline-none"/>
+                          <input type="text" value={item.code === "—" ? "" : item.code} placeholder="Code" onChange={e => handleEditStagedItem(item.id, 'code', e.target.value)} className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none"/>
+                          <input type="number" value={Math.round(item.basePrice)} onChange={e => handleEditStagedItem(item.id, 'basePrice', e.target.value)} className="w-10 text-right font-bold focus:bg-white focus:outline-none"/>
+                          <span className="font-bold text-stone-900 w-12 text-right">{Math.round(item.totalAmount)}</span>
+                          <button type="button" onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1"><i className="fa-solid fa-trash-can"></i></button>
+                        </div>
+                      ))}
                     </div>
-                  ) : (
-                    <div className="bg-white p-4 rounded-xl border border-stone-200 text-center text-xs text-stone-400 italic">
-                      No draft items staged. Use command parser input above.
-                    </div>
-                  )}
-
-                  {/* 3. Shortcuts Matrix */}
-                  <div className="bg-white p-2.5 rounded-xl border border-stone-200 shadow-sm">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider mb-1.5">Direct Shortcuts Matrix</span>
-                    <div className="flex gap-1.5 overflow-x-auto pb-1 custom-scroll">
-                      {cloudProducts.length > 0 ? (
-                        cloudProducts.slice(0, 15).map((p) => (
-                          <button 
-                            key={p.id}
-                            type="button"
-                            onClick={() => {
-                              setParserInput(prev => {
-                                const match = prev.match(/^\d+(\.\d+)?\s+/);
-                                const qtyPart = match ? match[0] : "1 ";
-                                return `${qtyPart}${p.name} `;
-                              });
-                              if (parserRef.current) parserRef.current.focus();
-                            }}
-                            className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 border border-stone-200 rounded-lg text-xs font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-sm font-sans"
-                          >
-                            {p.name}
-                          </button>
-                        ))
-                      ) : (
-                        <div className="text-[10px] text-stone-400 italic">No items stored in catalog directory.</div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* 2nd Form Input Method (Collapsible) */}
-                  {showManualInputs && (
-                    <div className="bg-white p-2.5 rounded-xl border border-stone-200 shadow-sm space-y-2 animate-slide-up">
-                      <div className="grid grid-cols-12 gap-2">
-                        <input 
-                          type="number" 
-                          placeholder="Qty" 
-                          value={qty} 
-                          onChange={e => setQty(e.target.value)}
-                          className="col-span-3 px-2 py-1 text-xs border bg-stone-50 rounded font-mono font-bold"
-                        />
-                        <input 
-                          type="text" 
-                          placeholder="Product Name..." 
-                          value={productSearch} 
-                          onChange={e => setProductSearch(e.target.value)}
-                          className="col-span-9 px-2 py-1 text-xs border bg-stone-50 rounded font-bold"
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <input 
-                          type="text" 
-                          placeholder="Multiplier (e.g. 20n)" 
-                          value={code} 
-                          onChange={e => setCode(e.target.value)}
-                          className="px-2 py-1 text-xs border bg-stone-50 rounded font-mono"
-                        />
-                        <input 
-                          type="number" 
-                          placeholder="Direct Rate" 
-                          value={price} 
-                          onChange={e => setPrice(e.target.value)}
-                          className="px-2 py-1 text-xs border bg-stone-50 rounded font-mono"
-                        />
-                      </div>
-                      <button 
-                        type="button" 
-                        onClick={async () => {
-                          const name = productSearch.trim();
-                          if (!name) return;
-                          const rateVal = price ? parseFloat(price) : calculateRateForToken(code, discountX);
-                          const item = {
-                            id: Date.now() + Math.random(),
-                            qty: parseFloat(qty) || 1,
-                            name: toTitleCase(name),
-                            code: code || "—",
-                            basePrice: rateVal,
-                            less: "—",
-                            finalUnitPrice: rateVal,
-                            totalAmount: (parseFloat(qty) || 1) * rateVal
-                          };
-                          setAddedItems(prev => [item, ...prev]);
-                          setProductSearch(""); setCode(""); setPrice(""); setQty("1");
-                          triggerNotification("Item added!");
-                        }}
-                        className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded-lg"
-                      >
-                        Add Item Line
-                      </button>
-                    </div>
-                  )}
-
+                  ) : <div className="text-center text-xs text-stone-400 italic bg-white p-4 border rounded-xl">Staged items will appear here.</div>}
                 </div>
 
               </div>
@@ -1240,598 +901,293 @@
 
             {/* Tab 2: Tally Bag */}
             {currentTab === "bag" && (
-              <div className="flex-grow flex flex-col gap-2 overflow-hidden">
+              <div className="flex-grow flex flex-col gap-2 p-2.5 bg-stone-50 overflow-hidden">
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 pr-1">
-                  
-                  <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm font-sans">
-                    <div className="flex justify-between items-center border-b pb-2 mb-2">
-                      <span className="text-xs font-black text-stone-500 uppercase tracking-wider">Bagged Checklist</span>
-                      <span className="text-[10px] text-stone-400 font-mono">Total Items: {baggedItems.length}</span>
-                    </div>
-
-                    {baggedItems.length === 0 ? (
-                      <div className="py-8 text-center text-stone-400 text-xs italic font-sans">
-                        Bag is empty. Tally staged checklist items from tab 1.
-                      </div>
-                    ) : (
-                      <div className="space-y-1.5">
-                        {baggedItems.map((item) => (
-                          <div key={item.id} className="p-2 bg-stone-50 rounded-lg border border-stone-200 space-y-1 animate-slide-up">
-                            <div className="flex justify-between items-center font-mono">
-                              
-                              <div className="flex gap-1 items-center flex-1 min-w-0 font-sans">
-                                <input 
-                                  type="number" 
-                                  value={item.qty} 
-                                  onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)}
-                                  className="w-8 bg-transparent text-center font-bold text-stone-900 focus:bg-white focus:outline-none border-b border-transparent focus:border-stone-400 font-mono"
-                                />
-                                <span className="text-stone-400 font-mono">×</span>
-                                <input 
-                                  type="text" 
-                                  value={item.name} 
-                                  onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)}
-                                  className="flex-1 bg-transparent truncate font-extrabold uppercase focus:bg-white focus:outline-none border-b border-transparent focus:border-stone-400"
-                                />
-                                <input 
-                                  type="text" 
-                                  value={item.code === "—" ? "":item.code} 
-                                  placeholder="Code"
-                                  onChange={e => handleEditBaggedItem(item.id, 'code', e.target.value)}
-                                  className="w-12 bg-transparent text-center font-bold text-indigo-600 focus:bg-white focus:outline-none border-b border-transparent focus:border-stone-400 text-[10px] font-mono"
-                                />
-                              </div>
-
-                              <button 
-                                type="button"
-                                onClick={() => {
-                                  setBaggedItems(prev => prev.filter(i => i.id !== item.id));
-                                  setAddedItems(prev => [item, ...prev]);
-                                }}
-                                className="text-stone-300 hover:text-amber-600 px-1 text-xs ml-2"
-                                title="Move back to Staged"
-                              >
-                                <i className="fa-solid fa-arrow-rotate-left"></i>
-                              </button>
-                            </div>
-
-                            <div className="grid grid-cols-12 gap-1 items-center font-mono text-xs">
-                              <div className="col-span-3 text-[10px] text-stone-500">
-                                Price: 
-                                <input 
-                                  type="number" 
-                                  value={Math.round(item.basePrice)} 
-                                  onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)}
-                                  className="w-10 bg-transparent text-stone-900 focus:bg-white focus:outline-none focus:border-stone-400 text-center font-bold"
-                                />
-                              </div>
-                              <div className="col-span-6 flex items-center gap-1">
-                                <span className="text-[10px] text-stone-400 uppercase">Less:</span>
-                                <input 
-                                  type="text" 
-                                  placeholder="e.g. 10%, x, 15"
-                                  value={item.less === "—" ? "" : item.less}
-                                  onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)}
-                                  className="w-full px-1.5 py-0.5 bg-white border border-stone-200 rounded text-xs focus:border-stone-800 focus:outline-none text-center font-bold text-rose-700"
-                                />
-                              </div>
-                              <div className="col-span-3 text-right font-black text-stone-800">
-                                {Math.round(item.totalAmount)}
-                              </div>
-                            </div>
+                  {baggedItems.length === 0 ? <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border">Bag is empty. Tally check draft items.</div> : (
+                    <div className="bg-white p-2.5 rounded-xl border space-y-1.5">
+                      {baggedItems.map(item => (
+                        <div key={item.id} className="p-1.5 bg-stone-50 rounded border space-y-1">
+                          <div className="flex items-center justify-between font-bold text-xs uppercase">
+                            <input type="text" value={item.name} onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)} className="bg-transparent focus:bg-white text-stone-900 flex-grow font-extrabold focus:outline-none"/>
+                            <button type="button" onClick={() => { setBaggedItems(prev => prev.filter(i => i.id !== item.id)); setAddedItems(prev => [item, ...prev]); }} className="text-amber-600"><i className="fa-solid fa-arrow-rotate-left"></i></button>
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Calculations sum card */}
-                  {baggedItems.length > 0 && (
-                    <div className="bg-white p-3 rounded-xl border border-stone-200 shadow-sm space-y-1 text-xs font-bold text-stone-700 font-sans">
-                      <div className="flex justify-between">
-                        <span>Gross Liability:</span>
-                        <span className="font-mono text-sm">{Math.round(baggedItems.reduce((acc, i) => acc + i.totalAmount, 0))}</span>
-                      </div>
-                      <div className="flex justify-between text-stone-900 font-extrabold text-sm border-t pt-1">
-                        <span>Net Due:</span>
-                        <span className="font-mono text-base">{Math.round(baggedItems.reduce((acc, i) => acc + i.totalAmount, 0))}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Collapsible PDF Preview frame */}
-                  {baggedItems.length > 0 && (
-                    <div className="space-y-1.5 no-print">
-                      <button 
-                        type="button" 
-                        onClick={() => setShowPreview(!showPreview)} 
-                        className="w-full bg-stone-200 hover:bg-stone-300 p-2 rounded-lg border border-stone-300 flex justify-between items-center text-xs font-black text-stone-700"
-                      >
-                        <span><i className="fa-solid fa-receipt mr-1"></i> Preview Printed Receipt View</span>
-                        <span>{showPreview ? 'Hide':'Show'}</span>
-                      </button>
-
-                      {showPreview && (
-                        <div className="bg-white border border-stone-300 p-4 rounded-xl shadow-inner max-w-sm mx-auto font-mono text-xs text-black">
-                          <div className="text-center pb-2 mb-2 border-b border-dashed border-black">
-                            <h2 className="text-sm font-bold uppercase">ESTIMATE RECEIPT</h2>
-                            <p className="text-[9px]">Rough Statement Profile</p>
-                            <p className="text-[10px] font-bold mt-1">{formatInvoiceDateTime(billDate)}</p>
-                            <p className="text-[10px] font-bold mt-1">{getThreeLetterCode(customerName)} ({getThreeLetterCode(customerCity)})</p>
-                          </div>
-                          
-                          <table className="w-full text-left text-[10px]">
-                            <thead>
-                              <tr className="border-b border-black">
-                                <th className="w-6 text-center">QT</th>
-                                <th>ITEM</th>
-                                <th className="text-right w-10">P</th>
-                                <th className="text-right w-12">AMT</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {[...baggedItems].sort((a,b) => a.name.localeCompare(b.name)).map((item, idx) => (
-                                <tr key={idx} className="align-top border-b border-stone-100">
-                                  <td className="text-center font-bold">{Math.round(item.qty)}</td>
-                                  <td className="uppercase font-bold">
-                                    {item.name}
-                                    {item.code !== "—" && <span className="block text-[8px] text-stone-500 font-mono"> {item.code.toUpperCase()}</span>}
-                                  </td>
-                                  <td className="text-right">{Math.round(item.finalUnitPrice)}</td>
-                                  <td className="text-right font-bold">{Math.round(item.totalAmount)}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-
-                          <div className="mt-3 pt-2 border-t border-dashed border-black text-right text-[11px] font-bold">
-                            Total Due: {Math.round(baggedItems.reduce((acc, i) => acc + i.totalAmount, 0))}
+                          <div className="grid grid-cols-12 gap-1 text-[11px] font-mono">
+                            <input type="number" value={item.qty} onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"/>
+                            <input type="number" value={Math.round(item.basePrice)} onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"/>
+                            <input type="text" placeholder="Less" value={item.less === "—" ? "" : item.less} onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} className="col-span-3 text-center border bg-white rounded font-bold text-rose-700 focus:outline-none"/>
+                            <div className="col-span-3 text-right font-black">{Math.round(item.totalAmount)}</div>
                           </div>
                         </div>
-                      )}
+                      ))}
                     </div>
                   )}
-
-                  {/* Generate / Print Action Buttons */}
                   {baggedItems.length > 0 && (
-                    <div className="p-2.5 bg-white border border-stone-200 rounded-xl space-y-2">
-                      <button 
-                        type="button" 
-                        onClick={handleGenerateAndPrintBill}
-                        className="w-full py-3.5 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs uppercase tracking-wider font-extrabold flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-98"
-                      >
-                        <i className="fa-solid fa-print"></i> 
-                        {saveStatus === 1 ? "Saving Log...":
-                         saveStatus === 2 ? "✓ Saved to Cloud":
-                         saveStatus === 3 ? "✓✓ Printed & Logged":
-                         saveStatus === -1 ? "✗ Connection Error":
-                         "Print Bill"}
-                      </button>
-
-                      {/* Separate share PDF receipt trigger */}
-                      {isBillGenerated && (
-                        <button 
-                          type="button" 
-                          onClick={() => sharePDFReceipt(baggedItems, customerName, customerCity, billDate)}
-                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1"
-                        >
-                          <i className="fa-solid fa-share-nodes"></i> Share Invoice PDF
-                        </button>
-                      )}
+                    <div className="bg-white p-2.5 border rounded-xl flex justify-between text-xs font-bold">
+                      <span>Grand Liability Summary:</span>
+                      <span className="font-mono text-sm text-amber-600 font-black">{Math.round(baggedItems.reduce((acc,i) => acc + i.totalAmount, 0))}</span>
                     </div>
                   )}
-
                 </div>
+                {baggedItems.length > 0 && (
+                  <div className="space-y-1">
+                    <button type="button" onClick={handleGenerateAndPrintBill} className="w-full py-3.5 bg-stone-900 text-white rounded-xl text-xs uppercase tracking-wider font-extrabold flex justify-center items-center gap-1.5">
+                      <i className="fa-solid fa-print"></i> {saveStatus === 1 ? "Saving...": "Print Bill"}
+                    </button>
+                    {isBillGenerated && <button type="button" onClick={() => sharePDFReceipt(baggedItems, customerName, customerCity, billDate)} className="w-full py-1.5 bg-emerald-600 text-white rounded text-xs font-bold uppercase"><i className="fa-solid fa-share-nodes"></i> Share Receipt</button>}
+                  </div>
+                )}
               </div>
             )}
 
             {/* Tab 3: Catalog Management */}
             {currentTab === "products" && (
-              <div className="flex-grow flex flex-col gap-3 overflow-hidden font-sans">
-                <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 space-y-3 overflow-y-auto custom-scroll flex-grow">
-                  <h2 className="text-xs font-black uppercase tracking-widest text-stone-800">Catalog Database</h2>
-                  
-                  {/* Simplistic dynamic catalog inputs storing NAME only */}
-                  <form onSubmit={handleProductAddSubmit} className="space-y-1.5 bg-stone-50 p-2.5 rounded-lg border border-stone-200">
-                    <input 
-                      type="text" 
-                      required 
-                      placeholder="Add New Product Name..." 
-                      value={newProdName} 
-                      onChange={e => setNewProdNameState(e.target.value)} 
-                      className="w-full px-3 py-2 text-xs border bg-white rounded font-bold" 
-                    />
-                    <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Add Product</button>
-                  </form>
-
-                  {/* Merges incorrect names with correct targets using searchable lists dropdown */}
-                  <div className="bg-stone-50 p-2.5 rounded-lg border border-stone-200 space-y-2">
-                    <h3 className="text-[9px] font-black uppercase text-stone-400">Merge Product Names</h3>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <select 
-                        value={mergeSource} 
-                        onChange={e => setMergeSource(e.target.value)} 
-                        className="w-full px-2 py-1.5 text-xs border rounded bg-white font-bold text-stone-800"
-                      >
-                        <option value="">Source (Wrong)</option>
-                        {[...cloudProducts].sort((a,b) => a.name.localeCompare(b.name)).map(p => (
-                          <option key={p.id} value={p.name}>{p.name.toUpperCase()}</option>
-                        ))}
-                      </select>
-                      <select 
-                        value={mergeTarget} 
-                        onChange={e => setMergeTarget(e.target.value)} 
-                        className="w-full px-2 py-1.5 text-xs border rounded bg-white font-bold text-stone-800"
-                      >
-                        <option value="">Target (Correct)</option>
-                        {[...cloudProducts].sort((a,b) => a.name.localeCompare(b.name)).map(p => (
-                          <option key={p.id} value={p.name}>{p.name.toUpperCase()}</option>
-                        ))}
-                      </select>
+              <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
+                <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5">
+                  <input type="text" required placeholder="Product Identification Name..." value={newProdName} onChange={e => setNewProdNameState(e.target.value)} className="w-full px-2 py-1 text-xs border rounded font-bold focus:outline-none"/>
+                  <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Add Product Entry</button>
+                </form>
+                <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll">
+                  {cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase())).map(p => (
+                    <div key={p.id} className="flex justify-between items-center py-1.5 text-xs font-bold">
+                      <span className="uppercase">{p.name}</span>
+                      <button type="button" onClick={() => handleCatalogDelete(p.id)} className="text-stone-300 hover:text-rose-600"><i className="fa-solid fa-trash-can"></i></button>
                     </div>
-                    <button type="button" onClick={handleProductMerge} className="w-full py-1 bg-amber-600 text-white text-xs font-bold rounded">Merge Catalog Records</button>
-                  </div>
-
-                  <input 
-                    type="text" 
-                    placeholder="Filter products catalog..." 
-                    value={productFilterQuery} 
-                    onChange={e => setProductFilterQuery(e.target.value)} 
-                    className="w-full px-3 py-1.5 text-xs bg-stone-50 border rounded font-semibold" 
-                  />
-
-                  <div className="border rounded divide-y max-h-48 overflow-y-auto custom-scroll bg-white">
-                    {cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase())).map((p) => (
-                      <div key={p.id} className="flex justify-between items-center p-2.5 text-xs font-bold">
-                        <span className="uppercase">{p.name}</span>
-                        <button type="button" onClick={() => window.firebaseBridge.deleteProductFromCloud(p.id)} className="text-stone-300 hover:text-rose-600 px-1">
-                          <i className="fa-solid fa-trash-can"></i>
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-
+                  ))}
                 </div>
               </div>
             )}
 
             {/* Tab 4: Logs & Historic Audit Ledger */}
             {currentTab === "logs" && (
-              <div className="flex-grow flex flex-col gap-3 overflow-hidden font-sans">
-                <div className="bg-white rounded-xl border border-stone-200 shadow-sm p-4 space-y-3 overflow-y-auto custom-scroll flex-grow">
-                  <h2 className="text-xs font-black uppercase tracking-widest text-stone-800">Historical Bills Registry</h2>
-                  
-                  <div className="space-y-2">
-                    {/* Older logs require verification, last 2 are always exposed */}
-                    {cloudBills.slice(0, isVerified ? cloudBills.length : 2).map((b) => (
-                      <div key={b.id} className="border border-stone-200 rounded-lg p-2.5 bg-stone-50 space-y-1.5 relative">
-                        <div className="flex justify-between font-bold text-xs">
-                          <div>
-                            <span className="text-stone-900 font-extrabold uppercase">{b.customerName}</span>
-                            {b.customerCity && <span className="text-[8px] bg-stone-200 px-1 ml-1.5 rounded font-mono font-bold text-stone-600">{b.customerCity}</span>}
-                          </div>
-                          <span className="font-mono font-black text-stone-900">{Math.round(b.totalAmount || 0)}</span>
-                        </div>
-
-                        {/* Dual Checkmark Verification indicators */}
-                        <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono">
-                          <span>{formatInvoiceDateTime(b.timestamp ? new Date(b.timestamp) : new Date())}</span>
-                          <div className="flex items-center gap-1.5 font-sans font-bold">
-                            {/* Shows ✓✓ if Firestore + Google Sheets successfully logged */}
-                            <span className="text-emerald-600 text-[10px]" title="Sync Status Flag">
-                              {b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}
-                            </span>
-                            <button type="button" onClick={() => handleLoadHistoricalBill(b)} className="px-1.5 py-0.5 bg-stone-800 text-white rounded text-[8px] uppercase">Load</button>
-                            <button type="button" onClick={() => sharePDFReceipt(b.items, b.customerName, b.customerCity, b.date)} className="px-1.5 py-0.5 bg-emerald-600 text-white rounded text-[8px] uppercase"><i className="fa-solid fa-share-nodes"></i> Share</button>
-                            {isVerified && (
-                              <button type="button" onClick={() => openLogEditor(b)} className="px-1.5 py-0.5 bg-amber-600 text-white rounded text-[8px] uppercase">Edit</button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {!isVerified && (
-                    <div className="pt-2 border-t text-center space-y-1.5">
-                      <p className="text-[9px] text-stone-500 font-bold">Enter admin passcode (ab) to access historical logs:</p>
-                      <input 
-                        type="password" 
-                        placeholder="Admin Access Code..." 
-                        value={passwordInput}
-                        onChange={(e) => {
-                          setPasswordInput(e.target.value);
-                          if (e.target.value === "ab") setIsVerified(true);
-                        }}
-                        className="w-32 text-center p-1 border rounded text-xs font-mono"
-                      />
-                    </div>
-                  )}
-
-                  {/* Inline Historical Log Editor Panel */}
-                  {isVerified && editingLogBill && (
-                    <div className="border border-amber-300 bg-amber-50 rounded-xl p-3 space-y-2 animate-slide-up">
-                      <div className="flex justify-between items-center border-b border-amber-200 pb-1">
-                        <span className="text-xs font-black text-amber-900">Edit Log Manifest ({editingLogBill.customerName})</span>
-                        <button type="button" onClick={() => setEditingLogBill(null)} className="text-[10px] text-stone-500 font-bold underline">Cancel</button>
-                      </div>
-
-                      <div className="space-y-1.5 font-mono text-xs">
-                        {(editingLogBill.items || []).map((item, idx) => (
-                          <div key={idx} className="flex gap-1 bg-white p-1 rounded border border-stone-150 items-center">
-                            <span className="flex-1 truncate uppercase font-bold font-sans">{item.name}</span>
-                            <input 
-                              type="number" 
-                              value={item.qty} 
-                              onChange={(e) => {
-                                const list = [...editingLogBill.items];
-                                const q = parseFloat(e.target.value) || 0;
-                                list[idx] = { ...item, qty: q, totalAmount: q * item.finalUnitPrice };
-                                setEditingLogBill({ ...editingLogBill, items: list });
-                              }}
-                              className="w-8 border text-center font-bold"
-                            />
-                            <input 
-                              type="number" 
-                              value={Math.round(item.finalUnitPrice)} 
-                              onChange={(e) => {
-                                const list = [...editingLogBill.items];
-                                const p = parseFloat(e.target.value) || 0;
-                                list[idx] = { ...item, finalUnitPrice: p, totalAmount: item.qty * p };
-                                setEditingLogBill({ ...editingLogBill, items: list });
-                              }}
-                              className="w-10 border text-center font-bold"
-                            />
-                            <span className="w-12 text-right font-black">{Math.round(item.qty * item.finalUnitPrice)}</span>
-                          </div>
-                        ))}
-
-                        <button 
-                          type="button" 
-                          onClick={handleSaveLogEdits}
-                          className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg"
-                        >
-                          Save Changes
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
+              <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
+                <div className="bg-white p-2.5 border rounded-xl flex justify-between items-center">
+                  <span className="text-xs font-bold uppercase tracking-wider text-stone-600">Secure Logs</span>
+                  <button type="button" onClick={clearFirestoreHistoricBills} className="p-1 bg-rose-50 text-rose-600 border border-rose-100 rounded text-[10px] font-bold uppercase flex items-center gap-1"><i className="fa-solid fa-trash-can"></i> Clear Logs</button>
                 </div>
+                <div className="space-y-1.5">
+                  {getSecureLogBills().map(b => (
+                    <div key={b.id} className="border bg-white rounded-lg p-2 text-xs space-y-1">
+                      <div className="flex justify-between font-bold">
+                        <span className="uppercase text-stone-950">{b.customerName} ({b.customerCity})</span>
+                        <span className="font-mono">{Math.round(b.totalAmount || 0)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono">
+                        <span>{b.formattedDateTime || b.date}</span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-emerald-600 font-sans">{b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}</span>
+                          <button type="button" onClick={() => handleLogsItemPrint(b)} className="px-1.5 py-0.5 bg-stone-100 border rounded text-[9px]">Print</button>
+                          <button type="button" onClick={() => sharePDFReceipt(b.items, b.customerName, b.customerCity, b.date)} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 border rounded text-[9px]">Share</button>
+                          <button type="button" onClick={() => handleLoadHistoricalBill(b)} className="px-1.5 py-0.5 bg-stone-800 text-white rounded text-[9px]">Load</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {!isVerified && (
+                  <div className="pt-2 border-t text-center space-y-1">
+                    <input 
+                      type="password" 
+                      placeholder="Enter Code..." 
+                      value={passwordInput}
+                      onChange={(e) => {
+                        setPasswordInput(e.target.value);
+                        if (e.target.value === "ab") setIsVerified(true);
+                      }}
+                      className="w-28 text-center p-1 border rounded text-xs font-mono focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                {isVerified && (
+                  <div className="pt-2 text-center">
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        if (cloudBills.length === 0) {
+                          triggerNotification("Ensure historic logs exist prior to parsing forecast trends.");
+                        } else {
+                          setShowAbhiModal(true);
+                        }
+                      }}
+                      className="w-full py-2 bg-stone-900 text-white hover:bg-stone-800 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1 uppercase tracking-wider"
+                    >
+                      <i className="fa-solid fa-chart-line text-amber-500 animate-pulse"></i> Open "abhi" Analytics Dashboard
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
           </main>
 
-          {/* Sticky Customer Details Bar - Placed instantly above 4 Tabs and fixed */}
-          <div className="bg-white p-2.5 border-t border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-md">
-            <div className="flex gap-2 items-center font-sans relative">
-              <div className="flex-1 min-w-0 relative" ref={custRef}>
+          {/* Sticky Customer configurations immediately above the 4 Tab navigators */}
+          <div className="bg-white p-2 border-t border-stone-200 w-full max-w-md mx-auto z-40 shadow-md">
+            <div className="flex gap-1.5 items-center font-sans">
+              <button type="button" onClick={triggerNewBillConfirmation} className="p-2 bg-rose-600 text-white rounded font-extrabold"><i className="fa-solid fa-plus-circle text-xs"></i></button>
+              <button type="button" onClick={syncSheetsCustomersToFirestore} title="Sync Sheets Customer database to Cloud" className="p-2 bg-stone-100 border text-stone-700 rounded"><i className="fa-solid fa-sync"></i></button>
+              
+              <div className="flex-grow min-w-0 relative" ref={custRef}>
                 <input 
                   type="text" 
-                  placeholder="Search Customer..."
+                  placeholder="Search Sheets customer..."
                   value={customerName}
                   onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
                   onFocus={() => setShowCustSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowCustSuggestions(false), 250)}
-                  className="w-full px-2.5 py-1.5 text-xs bg-stone-50 border border-stone-250 rounded font-bold focus:border-stone-500 focus:outline-none"
+                  className="w-full px-2 py-1.5 text-xs bg-stone-50 border rounded font-bold focus:border-stone-500 focus:outline-none"
                 />
                 {showCustSuggestions && dbCustomers.length > 0 && (
-                  <div className="absolute bottom-full mb-1.5 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded-lg shadow-2xl z-50 divide-y divide-stone-100">
+                  <div className="absolute bottom-full mb-1 left-0 right-0 max-h-40 overflow-y-auto bg-white border rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
                     {dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase())).map((c, i) => (
-                      <div 
-                        key={i} 
-                        onMouseDown={() => {
-                          handleCustomerSearchAndSelect(c.name);
-                          setShowCustSuggestions(false);
-                        }} 
-                        className="px-3 py-2 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold"
-                      >
+                      <div key={i} onMouseDown={() => { handleCustomerSearchAndSelect(c.name); setShowCustSuggestions(false); }} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
                         <span>{c.name}</span>
-                        {c.city && <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
+                        {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
                       </div>
                     ))}
                   </div>
                 )}
               </div>
 
-              <input 
-                type="text" 
-                placeholder="City"
-                value={customerCity}
-                onChange={(e) => setCustomerCity(e.target.value)}
-                className="w-16 px-2 py-1.5 text-xs bg-stone-50 border border-stone-200 rounded text-center font-semibold focus:border-stone-500 focus:outline-none"
-              />
-
-              <div className="flex items-center gap-1">
-                <span className="text-[9px] text-stone-400 font-extrabold">X%:</span>
-                <input 
-                  type="number" 
-                  placeholder="0"
-                  value={discountX}
-                  onChange={(e) => setDiscountX(e.target.value)}
-                  className="w-10 px-1 py-1.5 text-xs bg-stone-50 border border-stone-200 rounded text-center font-mono font-bold focus:border-stone-500 focus:outline-none"
-                />
+              <input type="text" placeholder="City" value={customerCity} onChange={e => setCustomerCity(e.target.value)} className="w-14 px-1 py-1.5 text-xs bg-stone-50 border rounded text-center focus:outline-none font-bold"/>
+              
+              <div className="flex items-center gap-0.5">
+                <span className="text-[8px] text-stone-400 font-extrabold">X%:</span>
+                <input type="number" placeholder="0" value={discountX} onChange={e => setDiscountX(e.target.value)} className="w-8 px-0.5 py-1.5 text-xs bg-stone-50 border rounded text-center font-mono font-bold focus:outline-none"/>
               </div>
 
-              {/* Bluetooth State Indicator Pill */}
-              <button 
-                type="button" 
-                onClick={connectBluetoothPrinter}
-                className={`px-2.5 py-1.5 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1 transition-colors ${
-                  bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-stone-100 text-stone-600 hover:bg-stone-200 border border-stone-200'
-                }`}
-              >
+              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-1.5 rounded text-[8px] font-black tracking-wider flex items-center gap-0.5 ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600'}`}>
                 <i className="fa-brands fa-bluetooth"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
               </button>
             </div>
           </div>
 
           {/* Clean App-Style Tab Navigation Bar */}
-          <footer className="bg-stone-900 border-t border-stone-800 py-1.5 px-4 no-print flex-shrink-0 z-40 shadow-lg">
+          <footer className="bg-stone-900 border-t py-2 px-4 no-print flex-shrink-0 z-40 shadow-lg">
             <div className="max-w-md mx-auto flex justify-around items-center">
-              
-              <button 
-                type="button" 
-                onClick={handleFastDraftTabClick}
-                className={`flex flex-col items-center gap-0.5 py-1 px-3.5 rounded-xl transition-all ${
-                  currentTab === "bill" ? "text-amber-400 bg-stone-800/40" : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
+              <button type="button" onClick={handleFastDraftTabClick} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all ${currentTab === "bill" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
                 <i className="fa-solid fa-receipt text-sm"></i>
-                <span className="text-[8px] font-black uppercase tracking-wider">Fast Draft</span>
+                <span className="text-[8px] font-bold uppercase tracking-wider">Fast Draft</span>
               </button>
-
-              <button 
-                type="button" 
-                onClick={() => setCurrentTab("bag")}
-                className={`flex flex-col items-center gap-0.5 py-1 px-3.5 rounded-xl transition-all relative ${
-                  currentTab === "bag" ? "text-amber-400 bg-stone-800/40" : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
+              <button type="button" onClick={() => setCurrentTab("bag")} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all relative ${currentTab === "bag" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
                 <i className="fa-solid fa-bag-shopping text-sm"></i>
-                <span className="text-[8px] font-black uppercase tracking-wider">Tally Bag</span>
-                {baggedItems.length > 0 && (
-                  <span className="absolute -top-1 right-2.5 bg-rose-600 text-white text-[8px] font-black h-4 w-4 rounded-full flex items-center justify-center animate-bounce">
-                    {baggedItems.length}
-                  </span>
-                )}
+                <span className="text-[8px] font-bold uppercase tracking-wider">Tally Bag</span>
+                {baggedItems.length > 0 && <span className="absolute -top-1 right-2 bg-rose-600 text-white text-[8px] font-black h-4 w-4 rounded-full flex items-center justify-center animate-bounce">{baggedItems.length}</span>}
               </button>
-
-              <button 
-                type="button" 
-                onClick={() => setCurrentTab("products")}
-                className={`flex flex-col items-center gap-0.5 py-1 px-3.5 rounded-xl transition-all ${
-                  currentTab === "products" ? "text-amber-400 bg-stone-800/40" : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
+              <button type="button" onClick={() => setCurrentTab("products")} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
                 <i className="fa-solid fa-box-open text-sm"></i>
-                <span className="text-[8px] font-black uppercase tracking-wider">Products</span>
+                <span className="text-[8px] font-bold uppercase tracking-wider">Products</span>
               </button>
-
-              <button 
-                type="button" 
-                onClick={() => setCurrentTab("logs")}
-                className={`flex flex-col items-center gap-0.5 py-1 px-3.5 rounded-xl transition-all ${
-                  currentTab === "logs" ? "text-amber-400 bg-stone-800/40" : "text-stone-400 hover:text-stone-200"
-                }`}
-              >
+              <button type="button" onClick={() => setCurrentTab("logs")} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
                 <i className="fa-solid fa-clock-rotate-left text-sm"></i>
-                <span className="text-[8px] font-black uppercase tracking-wider">Historic</span>
+                <span className="text-[8px] font-bold uppercase tracking-wider">Historic</span>
               </button>
-
             </div>
           </footer>
 
-          {/* High Magnification A4 Printable Receipt Template */}
-          <div id="printable-bill-invoice" className="p-1 text-black font-mono text-[36px] font-black leading-normal">
-            <div className="text-center pb-3 mb-3 border-b-4 border-black">
-              <h2 className="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
-              <p className="text-[24px] font-extrabold">Rough Statement Profile</p>
-              
-              <div className="mt-2.5 text-center text-[28px] font-black border-y-4 border-dashed border-black py-2">
-                {getThreeLetterCode(customerName)} ({getThreeLetterCode(customerCity)}) - {formatInvoiceDateTime(billDate)}
+          {/* DYNAMIC PREDICATIVE PRODUCT INSIGHTS "abhi" MODAL */}
+          {showAbhiModal && abhiData && (
+            <div className="absolute inset-0 bg-stone-900/95 z-50 flex flex-col p-4 overflow-hidden animate-slide-up text-white font-sans">
+              <div className="flex justify-between items-center border-b border-stone-800 pb-2 flex-shrink-0">
+                <span className="text-sm font-black uppercase text-amber-400 tracking-wider flex items-center gap-1.5"><i className="fa-solid fa-chart-line"></i> "abhi" Product Predictive Analytics Dashboard</span>
+                <button type="button" onClick={() => setShowAbhiModal(false)} className="text-stone-400 hover:text-white font-extrabold text-xs bg-stone-800 px-3 py-1 rounded">Close</button>
               </div>
-            </div>
 
-            {/* Print columns: QT | ITEM | P | AMT. Row margins expanded by 8% */}
-            <table className="w-full text-left mt-3 border-collapse text-[34px] font-black">
-              <thead>
-                <tr className="border-b-4 border-black text-[28px] font-black uppercase">
-                  <th className="py-3 w-16 text-center">QT</th>
-                  <th className="py-3 pl-1">ITEM</th>
-                  <th className="py-3 text-right w-36">P</th>
-                  <th className="py-3 text-right w-44">AMT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedInvoiceItems.map((item, idx) => (
-                  <tr key={idx} className="align-top border-b-2 border-stone-200">
-                    <td className="py-3.5 text-center font-mono">{Math.round(item.qty)}</td>
-                    <td className="py-3.5 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight">
-                      <div>{item.name.trim().toUpperCase()}</div>
-                      {item.code && item.code !== "—" && (
-                        <div className="text-[28px] text-stone-700 font-mono mt-1 font-bold">
-                          {" " + item.code.toUpperCase()}
+              {/* Scrollable Metrics Body */}
+              <div className="flex-1 overflow-y-auto custom-scroll py-3 space-y-4">
+                
+                {/* Section 1: Sales Extremes */}
+                <div className="grid grid-cols-2 gap-3 flex-shrink-0">
+                  <div className="bg-stone-800 p-3 rounded-xl border border-stone-700">
+                    <span className="block text-[9px] text-stone-400 uppercase font-black">Max Amount Product (Revenue)</span>
+                    <span className="block text-sm font-bold text-amber-400 mt-1 truncate">{abhiData.maxAmountProduct ? abhiData.maxAmountProduct.name : "None"}</span>
+                    <span className="text-xs text-stone-300 font-mono mt-0.5 block">Sum: ₹{abhiData.maxAmountProduct ? Math.round(abhiData.maxAmountProduct.totalRevenue) : 0}</span>
+                  </div>
+                  <div className="bg-stone-800 p-3 rounded-xl border border-stone-700">
+                    <span className="block text-[9px] text-stone-400 uppercase font-black">Max Quantity Product</span>
+                    <span className="block text-sm font-bold text-emerald-400 mt-1 truncate">{abhiData.maxQtyProduct ? abhiData.maxQtyProduct.name : "None"}</span>
+                    <span className="text-xs text-stone-300 font-mono mt-0.5 block">Quantity: {abhiData.maxQtyProduct ? Math.round(abhiData.maxQtyProduct.totalQty) : 0} units</span>
+                  </div>
+                </div>
+
+                {/* Section 2: Predictive Product Forecasting (Week / Month / Quarter Forecasts) */}
+                <div className="bg-stone-850 p-3 rounded-xl border border-stone-700 space-y-2 animate-slide-up">
+                  <div>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-amber-400">Next Period Sales Forecast</h3>
+                    <p className="text-[9px] text-stone-400 leading-tight">Advanced trend calculations based on run-rates and historical sales velocity factors.</p>
+                  </div>
+                  <div className="overflow-x-auto custom-scroll">
+                    <table className="w-full text-left text-xs font-mono">
+                      <thead>
+                        <tr className="border-b border-stone-700 text-[10px] text-stone-400">
+                          <th className="py-1">PRODUCT</th>
+                          <th className="py-1 text-center">NEXT WEEK</th>
+                          <th className="py-1 text-center text-amber-300">NEXT MONTH</th>
+                          <th className="py-1 text-center text-emerald-300">NEXT QTR</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-800">
+                        {abhiData.predictions.map((p, i) => (
+                          <tr key={i} className="hover:bg-stone-800/40">
+                            <td className="py-1.5 font-bold uppercase truncate max-w-[120px] font-sans">{p.name}</td>
+                            <td className="py-1.5 text-center font-bold">{p.nextWeek}</td>
+                            <td className="py-1.5 text-center font-bold text-amber-300">{p.nextMonth}</td>
+                            <td className="py-1.5 text-center font-bold text-emerald-300">{p.nextQuarter}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Section 3: Period Sales segment bought by each customer */}
+                <div className="bg-stone-850 p-3 rounded-xl border border-stone-700 space-y-2">
+                  <div>
+                    <h3 className="text-xs font-black uppercase tracking-wider text-emerald-400">Max Quantity Bought by Each Client</h3>
+                    <p className="text-[9px] text-stone-400">Most-ordered product breakdown mapping individual accounts for customized targeting.</p>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto custom-scroll divide-y divide-stone-800">
+                    {abhiData.customerSegmentList.map((cs, idx) => (
+                      <div key={idx} className="py-2 flex justify-between items-center text-xs">
+                        <span className="font-bold uppercase text-stone-300">{cs.customer}</span>
+                        <div className="text-right space-y-0.5 font-sans">
+                          <span className="block text-[10px] text-stone-400">Monthly Top: <span className="text-amber-400 font-bold uppercase">{cs.monthly}</span></span>
+                          <span className="block text-[10px] text-stone-400">Quarterly Top: <span className="text-emerald-400 font-bold uppercase">{cs.quarterly}</span></span>
                         </div>
-                      )}
-                    </td>
-                    <td className="py-3.5 text-right font-mono">{Math.round(item.finalUnitPrice)}</td>
-                    <td className="py-3.5 text-right font-mono font-black">{Math.round(item.totalAmount)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div className="mt-8 pt-4 border-t-4 border-dashed border-black text-right space-y-2 text-[32px] font-black">
-              <div className="flex justify-between font-extrabold">
-                <span>Gross Liability:</span>
-                <span>{Math.round(generatedItems.reduce((acc, i) => acc + i.totalAmount, 0))}</span>
-              </div>
-              <div className="flex justify-between text-[42px] font-black border-t-4 border-black pt-3">
-                <span>Net Total:</span>
-                <span>{Math.round(generatedItems.reduce((acc, i) => acc + i.totalAmount, 0))}</span>
-              </div>
-            </div>
-
-            <div className="mt-14 text-center text-[34px] font-bold pt-6 border-t-4 border-black">
-              Thanks for visiting!
-            </div>
-          </div>
-
-          {/* Fast Draft Multi-Action Confirmation Modal */}
-          {showFastDraftConfirmModal && (
-            <div className="absolute inset-0 bg-stone-900/80 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-xl border border-stone-200">
-                <div className="text-stone-900 font-bold text-sm flex items-center gap-1.5">
-                  <i className="fa-solid fa-circle-question text-amber-500 text-lg"></i> Fast Draft Selection
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <p className="text-xs text-stone-600 leading-relaxed font-semibold">Do you want to create a new bill or add items to old bill?</p>
-                <div className="flex flex-col gap-2 pt-2">
-                  <button 
-                    type="button" 
-                    onClick={() => {
-                      handleResetAll();
-                      setShowFastDraftConfirmModal(false);
-                      setCurrentTab("bill");
-                    }} 
-                    className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold rounded-lg text-xs transition-colors"
-                  >
-                    New Bill (Clear Everything)
-                  </button>
-                  <button 
-                    type="button" 
-                    onClick={() => {
-                      setShowFastDraftConfirmModal(false);
-                      setCurrentTab("bill");
-                    }} 
-                    className="w-full py-2.5 bg-stone-900 hover:bg-stone-800 text-white font-extrabold rounded-lg text-xs transition-colors"
-                  >
-                    Add Items to Old Bill
-                  </button>
-                  <button 
-                    type="button" 
-                    onClick={() => setShowFastDraftConfirmModal(false)} 
-                    className="w-full py-2 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-lg text-xs font-bold border border-stone-200 transition-colors"
-                  >
-                    Cancel
-                  </button>
+
+                {/* Section 4: AI Smart Suggestions & Bundle cross-selling */}
+                <div className="bg-stone-800 p-3 rounded-xl border border-stone-700 space-y-2">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-amber-400 font-sans">Bundle cross-selling opportunities</h3>
+                  <div className="space-y-1.5">
+                    {abhiData.bundles.length > 0 ? abhiData.bundles.map((b, i) => (
+                      <div key={i} className="text-xs bg-stone-850 p-2 rounded border border-stone-700 flex justify-between items-center font-sans">
+                        <span className="font-bold text-stone-300 uppercase">{b.pair}</span>
+                        <span className="text-[10px] bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded font-bold font-mono">Bought Together: {b.count} times</span>
+                      </div>
+                    )) : <p className="text-[10px] text-stone-400 italic">Generate bills with multiple products to display co-occurring bundles.</p>}
+                  </div>
                 </div>
+
               </div>
             </div>
           )}
 
-          {/* Original Single Option Fallback Modal */}
-          {showNewBillModal && (
+          {/* Printable container isolating styling overrides */}
+          <div id="printable-bill-invoice"></div>
+
+          {/* Confirmation Modals */}
+          {showFastDraftConfirmModal && (
             <div className="absolute inset-0 bg-stone-900/80 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl max-w-sm w-full p-5 space-y-4 shadow-xl border border-stone-200">
-                <div className="text-stone-900 font-bold text-sm flex items-center gap-1.5">
-                  <i className="fa-solid fa-circle-exclamation text-rose-500 text-lg"></i> Confirm New Bill
-                </div>
-                <p className="text-xs text-stone-600 leading-relaxed font-semibold">Do you want to create a new bill? Draft items and current customer configs will be cleaned.</p>
-                <div className="flex gap-2.5 justify-end">
-                  <button type="button" onClick={() => setShowNewBillModal(false)} className="px-4 py-2 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-lg text-xs font-bold">Cancel</button>
-                  <button type="button" onClick={() => { handleResetAll(); setShowNewBillModal(false); }} className="px-4 py-2 bg-rose-600 text-white rounded-lg text-xs font-bold">Confirm New Bill</button>
+              <div className="bg-white rounded-2xl max-w-sm w-full p-4 space-y-3">
+                <div className="text-stone-900 font-extrabold text-xs flex items-center gap-1 font-sans"><i className="fa-solid fa-circle-question text-amber-500"></i> Fast Draft Selection</div>
+                <p className="text-xs text-stone-600 font-semibold leading-relaxed font-sans">Do you want to clear current draft values or add items to old bill?</p>
+                <div className="flex flex-col gap-1.5 pt-1 font-sans">
+                  <button type="button" onClick={() => { handleResetAll(); setShowFastDraftConfirmModal(false); setCurrentTab("bill"); }} className="w-full py-2 bg-rose-600 text-white rounded text-xs font-extrabold">New Bill (Clear Everything)</button>
+                  <button type="button" onClick={() => { setShowFastDraftConfirmModal(false); setCurrentTab("bill"); }} className="w-full py-2 bg-stone-900 text-white rounded text-xs font-extrabold">Add Items to Old Bill</button>
+                  <button type="button" onClick={() => setShowFastDraftConfirmModal(false)} className="w-full py-1.5 bg-stone-100 text-stone-800 rounded text-xs font-bold border">Cancel</button>
                 </div>
               </div>
             </div>
@@ -1844,4 +1200,3 @@
   </script>
 </body>
 </html>
-
