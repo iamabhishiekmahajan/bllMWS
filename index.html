@@ -207,7 +207,6 @@
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
-      const [showAbhiModal, setShowAbhiModal] = useState(false);
 
       const custRef = useRef(null);
       const prodRef = useRef(null);
@@ -281,7 +280,6 @@
         }
       };
 
-      // Restored complete resetting flow to prepare for fresh invoices
       const handleResetAll = () => {
         setCustomerName(""); setCustomerCity(""); setDiscountX("0");
         setQty("1"); setProductSearch(""); setSelectedProduct(null); setCode(""); setPrice(""); setLess("");
@@ -296,7 +294,6 @@
         }, 100);
       };
 
-      // Restored historical loaders directly mounting logs into bag
       const handleLoadHistoricalBill = (historicalBillObj) => {
         setCustomerName(historicalBillObj.customerName || "");
         setCustomerCity(historicalBillObj.customerCity || "");
@@ -333,23 +330,6 @@
         } catch (e) {
           console.warn("Sheet retrieve bypass:", e.message);
           triggerNotification("Sync Complete locally");
-        }
-      };
-
-      const clearFirestoreHistoricBills = async () => {
-        if (!window.confirm("Are you absolutely sure you want to clear ALL historic bills in Firestore?")) return;
-        triggerNotification("Clearing historic bills...");
-        const { db, appId, deleteDoc, doc } = window.firebaseBridge;
-        if (db) {
-          try {
-            for (const b of cloudBills) {
-              await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', String(b.id)));
-            }
-            triggerNotification("✓ All Firestore historic bills cleared!");
-          } catch (e) {
-            console.error(e);
-            triggerNotification("Failed to clear bills.");
-          }
         }
       };
 
@@ -423,7 +403,9 @@
             nextWeek: Math.round(thisWeekQty * trendFactor) || Math.round(p.totalQty / 12) || 0,
             nextMonth: Math.round(p.monthlyQty * trendFactor) || Math.round(p.totalQty / 3) || 0,
             nextQuarter: Math.round(p.quarterlyQty * trendFactor) || Math.round(p.totalQty) || 0,
-            currentRate: p.monthlyQty
+            currentRate: p.monthlyQty,
+            revenue: p.totalRevenue,
+            totalQty: p.totalQty
           };
         }).sort((a,b) => b.nextMonth - a.nextMonth);
 
@@ -444,19 +426,23 @@
           });
         });
 
-        const bundleFreq = {};
+        const bundlesFreq = {};
         cloudBills.forEach(b => {
           const items = (b.items || []).map(i => String(i.name).toUpperCase().trim());
           for (let i = 0; i < items.length; i++) {
             for (let j = i + 1; j < items.length; j++) {
               const pair = [items[i], items[j]].sort().join(" + ");
-              bundleFreq[pair] = (bundleFreq[pair] || 0) + 1;
+              bundlesFreq[pair] = (bundlesFreq[pair] || 0) + 1;
             }
           }
         });
-        const bundles = Object.entries(bundleFreq).map(([pair, count]) => ({ pair, count })).sort((a,b) => b.count - a.count).slice(0, 3);
+        const bundles = Object.entries(bundlesFreq).map(([pair, count]) => ({ pair, count })).sort((a,b) => b.count - a.count).slice(0, 3);
 
-        return { maxAmountProduct, maxQtyProduct, predictions, customerSegmentList, bundles };
+        const catalogProductsSet = new Set(cloudProducts.map(p => p.name.toUpperCase().trim()));
+        const soldProductsSet = new Set(productList.map(p => p.name.toUpperCase().trim()));
+        const deadStock = Array.from(catalogProductsSet).filter(p => !soldProductsSet.has(p));
+
+        return { maxAmountProduct, maxQtyProduct, predictions, customerSegmentList, bundles, deadStock };
       };
 
       const calculateRateForToken = (codeStr, rawX) => {
@@ -577,6 +563,57 @@
         }));
       };
 
+      // SYNCHRONOUS DOM RECEIPT RENDERER: Solves "Print but not printing" error (React async state lag)
+      const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
+        const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
+        const total = itemsList.reduce((acc, i) => acc + i.totalAmount, 0);
+        return `
+          <div class="text-center pb-3 mb-3 border-b-4 border-black">
+            <h2 class="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
+            <p class="text-[24px] font-extrabold">Rough Statement Profile</p>
+            <div class="mt-2.5 text-center text-[28px] font-black border-y-4 border-dashed border-black py-2">
+              ${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) - ${dateTimeStr}
+            </div>
+          </div>
+          <table class="w-full text-left mt-3 border-collapse text-[34px] font-black">
+            <thead>
+              <tr class="border-b-4 border-black text-[28px] font-black uppercase">
+                <th class="py-3 w-16 text-center">QT</th>
+                <th class="py-3 pl-1">ITEM</th>
+                <th class="py-3 text-right w-36">P</th>
+                <th class="py-3 text-right w-44">AMT</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sortedItems.map(item => `
+                <tr class="align-top border-b-2 border-stone-250">
+                  <td class="py-3.5 text-center font-mono">${Math.round(item.qty)}</td>
+                  <td class="py-3.5 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight">
+                    <div>${item.name.trim().toUpperCase()}</div>
+                    ${item.code && item.code !== "—" ? `<div class="text-[28px] text-stone-700 font-mono mt-1 font-bold"> ${item.code.toUpperCase()}</div>` : ""}
+                  </td>
+                  <td class="py-3.5 text-right font-mono">${Math.round(item.finalUnitPrice)}</td>
+                  <td class="py-3.5 text-right font-mono font-black">${Math.round(item.totalAmount)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <div class="mt-8 pt-4 border-t-4 border-dashed border-black text-right space-y-2 text-[32px] font-black">
+            <div class="flex justify-between font-extrabold">
+              <span>Gross Liability:</span>
+              <span>${Math.round(total)}</span>
+            </div>
+            <div class="flex justify-between text-[42px] font-black border-t-4 border-black pt-3">
+              <span>Net Total:</span>
+              <span>${Math.round(total)}</span>
+            </div>
+          </div>
+          <div class="mt-14 text-center text-[34px] font-bold pt-6 border-t-4 border-black">
+            Thanks for visiting!
+          </div>
+        `;
+      };
+
       const handleGenerateAndPrintBill = async () => {
         if (baggedItems.length === 0) return;
         const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
@@ -586,56 +623,15 @@
         setIsBillGenerated(true);
         const printDateFormatted = formatInvoiceDateTime(billDate);
 
+        // Render synchronously directly to print block DOM before window.print() (Ensures absolute reliability)
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           const finalClientName = customerName.trim() || "Walk-In Customer";
-          const sortedPrintItems = [...baggedItems].sort((a,b) => a.name.localeCompare(b.name));
-          const computedTotalSum = baggedItems.reduce((acc, i) => acc + i.totalAmount, 0);
-
-          printBody.innerHTML = `
-            <div class="text-center pb-3 mb-3 border-b-4 border-black">
-              <h2 class="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
-              <p class="text-[24px] font-extrabold">Rough Statement Profile</p>
-              <div class="mt-2.5 text-center text-[28px] font-black border-y-4 border-dashed border-black py-2">
-                ${getThreeLetterCode(finalClientName)} (${getThreeLetterCode(customerCity)}) - ${printDateFormatted}
-              </div>
-            </div>
-            <table class="w-full text-left mt-3 border-collapse text-[34px] font-black">
-              <thead>
-                <tr class="border-b-4 border-black text-[28px] font-black uppercase">
-                  <th class="py-3 w-16 text-center">QT</th>
-                  <th class="py-3 pl-1">ITEM</th>
-                  <th class="py-3 text-right w-36">P</th>
-                  <th class="py-3 text-right w-44">AMT</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sortedPrintItems.map(item => `
-                  <tr class="align-top border-b-2 border-stone-200">
-                    <td class="py-3.5 text-center font-mono">${Math.round(item.qty)}</td>
-                    <td class="py-3.5 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight">
-                      <div>${item.name.trim().toUpperCase()}</div>
-                      ${item.code && item.code !== "—" ? `<div class="text-[28px] text-stone-700 font-mono mt-1 font-bold"> ${item.code.toUpperCase()}</div>` : ""}
-                    </td>
-                    <td class="py-3.5 text-right font-mono">${Math.round(item.finalUnitPrice)}</td>
-                    <td class="py-3.5 text-right font-mono font-black">${Math.round(item.totalAmount)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-            <div class="mt-8 pt-4 border-t-4 border-dashed border-black text-right space-y-2 text-[32px] font-black">
-              <div class="flex justify-between font-extrabold">
-                <span>Gross Liability:</span>
-                <span>${Math.round(computedTotalSum)}</span>
-              </div>
-              <div class="flex justify-between text-[42px] font-black border-t-4 border-black pt-3">
-                <span>Net Total:</span>
-                <span>${Math.round(computedTotalSum)}</span>
-              </div>
-            </div>
-          `;
+          printBody.innerHTML = renderReceiptForSpool(baggedItems, finalClientName, customerCity, printDateFormatted);
         }
-        setTimeout(() => window.print(), 100);
+        
+        // Execute print instantly
+        window.print();
         setSaveStatus(1);
 
         const finalClientName = customerName.trim() || "Walk-In Customer";
@@ -685,50 +681,19 @@
         const element = document.getElementById("printable-bill-invoice");
         if (!element) return;
         const printDateFormatted = formatInvoiceDateTime(activeDate);
-        const sortedPrintItems = [...items].sort((a,b) => a.name.localeCompare(b.name));
-        const computedTotalSum = items.reduce((acc, i) => acc + i.totalAmount, 0);
-
-        element.innerHTML = `
-          <div class="text-center pb-3 mb-3 border-b-4 border-black">
-            <h2 class="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
-            <div class="mt-2 text-center text-[28px] font-black py-2">${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) - ${printDateFormatted}</div>
-          </div>
-          <table class="w-full text-left mt-3 border-collapse text-[34px] font-black">
-            <tbody>
-              ${sortedPrintItems.map(item => `
-                <tr>
-                  <td>${Math.round(item.qty)}</td>
-                  <td>${item.name.toUpperCase()}</td>
-                  <td>${Math.round(item.finalUnitPrice)}</td>
-                  <td>${Math.round(item.totalAmount)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-          <div class="mt-8 text-right text-[32px]">Total Due: ${Math.round(computedTotalSum)}</div>
-        `;
+        element.innerHTML = renderReceiptForSpool(items, custName, cityVal, printDateFormatted);
         const options = { margin: [4, 4, 4, 4], filename: `Invoice_${getThreeLetterCode(custName)}.pdf`, html2canvas: { scale: 2 } };
         html2pdf().set(options).from(element).save();
       };
 
+      // Spools print synchronously for logs tab directly
       const handleLogsItemPrint = (logItem) => {
-        setGeneratedItems(logItem.items || []);
-        setIsBillGenerated(true);
-        const printDateFormatted = formatInvoiceDateTime(logItem.timestamp ? new Date(logItem.timestamp) : new Date());
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
-          const sortedPrintItems = [...(logItem.items || [])].sort((a,b) => a.name.localeCompare(b.name));
-          const computedTotalSum = logItem.totalAmount || 0;
-          printBody.innerHTML = `
-            <div class="text-center pb-3 mb-3">
-              <h2 class="text-[44px] font-black">ESTIMATE RECEIPT</h2>
-              <p>${getThreeLetterCode(logItem.customerName)} (${getThreeLetterCode(logItem.customerCity)}) - ${printDateFormatted}</p>
-            </div>
-            <table class="w-full text-[34px]">${sortedPrintItems.map(item => `<tr><td>${Math.round(item.qty)}</td><td>${item.name}</td><td>${Math.round(item.finalUnitPrice)}</td><td>${Math.round(item.totalAmount)}</td></tr>`).join('')}</table>
-            <div class="text-right text-[36px] font-black">Total: ${Math.round(computedTotalSum)}</div>
-          `;
+          const printDateFormatted = formatInvoiceDateTime(logItem.timestamp ? new Date(logItem.timestamp) : new Date());
+          printBody.innerHTML = renderReceiptForSpool(logItem.items || [], logItem.customerName, logItem.customerCity, printDateFormatted);
         }
-        setTimeout(() => window.print(), 120);
+        window.print();
       };
 
       const handleFastDraftTabClick = () => {
@@ -787,9 +752,14 @@
       };
 
       const handleCatalogDelete = async (id) => {
-        if (window.firebaseBridge?.connected) {
-          await window.firebaseBridge.deleteProductFromCloud(id);
-          triggerNotification("Product deleted.");
+        const { deleteProductFromCloud } = window.firebaseBridge;
+        if (deleteProductFromCloud) {
+          try {
+            await deleteProductFromCloud(id);
+            triggerNotification("Product deleted.");
+          } catch (err) {
+            console.error(err);
+          }
         }
       };
 
@@ -827,6 +797,31 @@
 
       const getSecureLogBills = () => isVerified ? cloudBills : cloudBills.slice(0, 2);
 
+      // FIXED: Restored complete product addition form submission callback (Rule 4)
+      const handleProductAddSubmit = async (e) => {
+        e.preventDefault();
+        const trimmed = newProdName.trim();
+        if (!trimmed) return;
+
+        const isDuplicate = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(trimmed));
+        if (isDuplicate) {
+          triggerNotification("Product already exists in catalogs!");
+          return;
+        }
+
+        const payload = { name: toTitleCase(trimmed) };
+        if (window.firebaseBridge?.connected) {
+          try {
+            await window.firebaseBridge.addProductToCloud(payload);
+            setNewProdNameState("");
+            triggerNotification("Product successfully cataloged!");
+          } catch (err) {
+            console.error(err);
+            triggerNotification("Failed to add product.");
+          }
+        }
+      };
+
       const autocompleteQuery = getParserAutocompleteQuery();
       const suggestions = autocompleteQuery ? cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQuery.toLowerCase())).slice(0, 5) : [];
       const abhiData = (cloudBills.length > 0) ? computeAbhiMetrics() : null;
@@ -840,12 +835,79 @@
             </div>
           )}
 
+          {/* Sticky Customer configurations line: MOVED TO THE ABSOLUTE TOP OF APP VIEW */}
+          <div className="bg-white p-2.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm">
+            <div className="flex gap-1.5 items-center font-sans">
+              <button type="button" onClick={triggerNewBillConfirmation} className="p-2 bg-rose-600 text-white rounded font-extrabold"><i className="fa-solid fa-plus-circle text-xs"></i></button>
+              <button type="button" onClick={syncSheetsCustomersToFirestore} title="Sync Sheets Customer database to Cloud" className="p-2 bg-stone-100 border text-stone-700 rounded"><i className="fa-solid fa-sync"></i></button>
+              
+              <div className="flex-grow min-w-0 relative" ref={custRef}>
+                <input 
+                  type="text" 
+                  name={`random_cust_${Math.random()}`}
+                  autocomplete="new-password"
+                  autocorrect="off"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  placeholder="Search Sheets customer..."
+                  value={customerName}
+                  onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
+                  onFocus={() => setShowCustSuggestions(true)}
+                  className="w-full px-2 py-1.5 text-xs bg-stone-50 border rounded font-bold focus:border-stone-500 focus:outline-none"
+                />
+                {showCustSuggestions && dbCustomers.length > 0 && (
+                  <div className="absolute top-full mt-1.5 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
+                    {dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase())).map((c, i) => (
+                      <div key={i} onMouseDown={() => { handleCustomerSearchAndSelect(c.name); setShowCustSuggestions(false); }} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
+                        <span>{c.name}</span>
+                        {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <input 
+                type="text" 
+                name={`random_city_${Math.random()}`}
+                autocomplete="new-password"
+                autocorrect="off"
+                spellcheck="false"
+                autocapitalize="off"
+                placeholder="City" 
+                value={customerCity} 
+                onChange={e => setCustomerCity(e.target.value)} 
+                className="w-14 px-1 py-1.5 text-xs bg-stone-50 border rounded text-center focus:outline-none font-bold"
+              />
+              
+              <div className="flex items-center gap-0.5">
+                <span className="text-[8px] text-stone-400 font-extrabold">X%:</span>
+                <input 
+                  type="number" 
+                  name={`random_disc_${Math.random()}`}
+                  autocomplete="new-password"
+                  autocorrect="off"
+                  spellcheck="false"
+                  autocapitalize="off"
+                  placeholder="0" 
+                  value={discountX} 
+                  onChange={e => setDiscountX(e.target.value)} 
+                  className="w-8 px-0.5 py-1.5 text-xs bg-stone-50 border rounded text-center font-mono font-bold focus:outline-none"
+                />
+              </div>
+
+              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-1.5 rounded text-[8px] font-black tracking-wider flex items-center gap-0.5 ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600'}`}>
+                <i className="fa-brands fa-bluetooth"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
+              </button>
+            </div>
+          </div>
+
           {/* Primary View Workspace */}
-          <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2 flex flex-col gap-2 overflow-hidden bg-stone-50 no-print">
+          <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2.5 flex flex-col gap-2.5 overflow-hidden bg-stone-50 no-print">
             
             {/* Tab 1: Billing Panel */}
             {currentTab === "bill" && (
-              <div className="flex-grow flex flex-col gap-2 overflow-hidden">
+              <div className="flex-grow flex flex-col gap-2.5 overflow-hidden">
                 
                 {/* Product shortcuts Matrix */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
@@ -858,7 +920,7 @@
                           return `${m ? m[0] : "1 "}${p.name} `;
                         });
                         if (parserRef.current) parserRef.current.focus();
-                      }} className="px-2 py-1 bg-stone-100 hover:bg-stone-200 border rounded text-[11px] font-bold text-stone-800 whitespace-nowrap">{p.name}</button>
+                      }} className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 border rounded text-[11px] font-bold text-stone-800 whitespace-nowrap">{p.name}</button>
                     ))}
                   </div>
                 </div>
@@ -866,12 +928,24 @@
                 {/* Fast Command Input Parser */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs relative flex-shrink-0">
                   <form onSubmit={handleParserSubmit}>
-                    <input ref={parserRef} type="text" autocomplete="off" placeholder="e.g. 12 sehra 40n" value={parserInput} onChange={e => setParserInput(e.target.value)} className="w-full px-2.5 py-2 text-xs bg-stone-50 border rounded font-mono font-bold focus:border-stone-800 focus:outline-none"/>
+                    <input 
+                      ref={parserRef} 
+                      type="text" 
+                      name={`random_parser_${Math.random()}`}
+                      autocomplete="new-password"
+                      autocorrect="off"
+                      spellcheck="false"
+                      autocapitalize="off"
+                      placeholder="e.g. 12 sehra 40n" 
+                      value={parserInput} 
+                      onChange={e => setParserInput(e.target.value)} 
+                      className="w-full px-2.5 py-2 text-xs bg-stone-50 border rounded font-mono font-bold focus:border-stone-800 focus:outline-none"
+                    />
                   </form>
                   {suggestions.length > 0 && (
-                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white border rounded shadow-lg z-50 divide-y divide-stone-100">
+                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/90 backdrop-blur-md border rounded shadow-lg z-50 divide-y divide-stone-100">
                       {suggestions.map(p => (
-                        <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-1.5 text-xs font-bold hover:bg-stone-100 cursor-pointer">{p.name}</div>
+                        <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-1.5 text-xs font-bold hover:bg-stone-800/10 cursor-pointer">{p.name}</div>
                       ))}
                     </div>
                   )}
@@ -884,10 +958,39 @@
                       {addedItems.map(item => (
                         <div key={item.id} className="flex items-center gap-1 text-xs bg-stone-50 p-1 border rounded font-mono animate-slide-up">
                           <button type="button" onClick={() => handleTalliedCheck(item)} className="h-5 w-5 rounded border bg-white flex items-center justify-center text-emerald-600"><i className="fa-solid fa-check text-[10px]"></i></button>
-                          <input type="number" value={item.qty} onChange={e => handleEditStagedItem(item.id, 'qty', e.target.value)} className="w-8 text-center font-bold bg-transparent focus:outline-none"/>
-                          <input type="text" value={item.name} onChange={e => handleEditStagedItem(item.id, 'name', e.target.value)} className="flex-grow truncate uppercase font-bold focus:bg-white focus:outline-none"/>
-                          <input type="text" value={item.code === "—" ? "" : item.code} placeholder="Code" onChange={e => handleEditStagedItem(item.id, 'code', e.target.value)} className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none"/>
-                          <input type="number" value={Math.round(item.basePrice)} onChange={e => handleEditStagedItem(item.id, 'basePrice', e.target.value)} className="w-10 text-right font-bold focus:bg-white focus:outline-none"/>
+                          <input 
+                            type="number" 
+                            name={`random_itemqty_${item.id}`}
+                            autocomplete="new-password"
+                            value={item.qty} 
+                            onChange={e => handleEditStagedItem(item.id, 'qty', e.target.value)} 
+                            className="w-8 text-center font-bold bg-transparent focus:outline-none"
+                          />
+                          <input 
+                            type="text" 
+                            name={`random_itemname_${item.id}`}
+                            autocomplete="new-password"
+                            value={item.name} 
+                            onChange={e => handleEditStagedItem(item.id, 'name', e.target.value)} 
+                            className="flex-grow truncate uppercase font-bold focus:bg-white focus:outline-none"
+                          />
+                          <input 
+                            type="text" 
+                            name={`random_itemcode_${item.id}`}
+                            autocomplete="new-password"
+                            value={item.code === "—" ? "" : item.code} 
+                            placeholder="Code" 
+                            onChange={e => handleEditStagedItem(item.id, 'code', e.target.value)} 
+                            className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none"
+                          />
+                          <input 
+                            type="number" 
+                            name={`random_itemprice_${item.id}`}
+                            autocomplete="new-password"
+                            value={Math.round(item.basePrice)} 
+                            onChange={e => handleEditStagedItem(item.id, 'basePrice', e.target.value)} 
+                            className="w-10 text-right font-bold focus:bg-white focus:outline-none"
+                          />
                           <span className="font-bold text-stone-900 w-12 text-right">{Math.round(item.totalAmount)}</span>
                           <button type="button" onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1"><i className="fa-solid fa-trash-can"></i></button>
                         </div>
@@ -908,13 +1011,42 @@
                       {baggedItems.map(item => (
                         <div key={item.id} className="p-1.5 bg-stone-50 rounded border space-y-1">
                           <div className="flex items-center justify-between font-bold text-xs uppercase">
-                            <input type="text" value={item.name} onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)} className="bg-transparent focus:bg-white text-stone-900 flex-grow font-extrabold focus:outline-none"/>
+                            <input 
+                              type="text" 
+                              name={`random_bagname_${item.id}`}
+                              autocomplete="new-password"
+                              value={item.name} 
+                              onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)} 
+                              className="bg-transparent focus:bg-white text-stone-900 flex-grow font-extrabold focus:outline-none"
+                            />
                             <button type="button" onClick={() => { setBaggedItems(prev => prev.filter(i => i.id !== item.id)); setAddedItems(prev => [item, ...prev]); }} className="text-amber-600"><i className="fa-solid fa-arrow-rotate-left"></i></button>
                           </div>
                           <div className="grid grid-cols-12 gap-1 text-[11px] font-mono">
-                            <input type="number" value={item.qty} onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"/>
-                            <input type="number" value={Math.round(item.basePrice)} onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"/>
-                            <input type="text" placeholder="Less" value={item.less === "—" ? "" : item.less} onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} className="col-span-3 text-center border bg-white rounded font-bold text-rose-700 focus:outline-none"/>
+                            <input 
+                              type="number" 
+                              name={`random_bagqty_${item.id}`}
+                              autocomplete="new-password"
+                              value={item.qty} 
+                              onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
+                              className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"
+                            />
+                            <input 
+                              type="number" 
+                              name={`random_bagprice_${item.id}`}
+                              autocomplete="new-password"
+                              value={Math.round(item.basePrice)} 
+                              onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
+                              className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"
+                            />
+                            <input 
+                              type="text" 
+                              name={`random_bagless_${item.id}`}
+                              autocomplete="new-password"
+                              placeholder="Less" 
+                              value={item.less === "—" ? "" : item.less} 
+                              onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
+                              className="col-span-3 text-center border bg-white rounded font-bold text-rose-700 focus:outline-none"
+                            />
                             <div className="col-span-3 text-right font-black">{Math.round(item.totalAmount)}</div>
                           </div>
                         </div>
@@ -942,15 +1074,41 @@
             {/* Tab 3: Catalog Management */}
             {currentTab === "products" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
-                <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5">
-                  <input type="text" required placeholder="Product Identification Name..." value={newProdName} onChange={e => setNewProdNameState(e.target.value)} className="w-full px-2 py-1 text-xs border rounded font-bold focus:outline-none"/>
+                <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0">
+                  <input 
+                    type="text" 
+                    name={`random_newprod_${Math.random()}`}
+                    autocomplete="new-password"
+                    required 
+                    placeholder="Product Identification Name..." 
+                    value={newProdName} 
+                    onChange={e => setNewProdNameState(e.target.value)} 
+                    className="w-full px-2 py-1 text-xs border rounded font-bold focus:outline-none"
+                  />
                   <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Add Product Entry</button>
                 </form>
+
+                {/* Search / Filter bar for products catalog - Prevents blank/unfilterable list */}
+                <div className="bg-white p-2 border rounded-xl space-y-1">
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
+                  <input 
+                    type="text" 
+                    name={`random_catfilter_${Math.random()}`}
+                    autocomplete="new-password"
+                    placeholder="Filter products list..." 
+                    value={productFilterQuery} 
+                    onChange={e => setProductFilterQuery(e.target.value)} 
+                    className="w-full px-2.5 py-1 text-xs bg-stone-50 border rounded font-semibold focus:outline-none" 
+                  />
+                </div>
+
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll">
                   {cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase())).map(p => (
                     <div key={p.id} className="flex justify-between items-center py-1.5 text-xs font-bold">
-                      <span className="uppercase">{p.name}</span>
-                      <button type="button" onClick={() => handleCatalogDelete(p.id)} className="text-stone-300 hover:text-rose-600"><i className="fa-solid fa-trash-can"></i></button>
+                      <span className="uppercase text-stone-800">{p.name}</span>
+                      <button type="button" onClick={() => handleCatalogDelete(p.id)} className="text-stone-300 hover:text-rose-600 transition-colors">
+                        <i className="fa-solid fa-trash-can"></i>
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -959,107 +1117,200 @@
 
             {/* Tab 4: Logs & Historic Audit Ledger */}
             {currentTab === "logs" && (
-              <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
-                <div className="bg-white p-2.5 border rounded-xl flex justify-between items-center">
-                  <span className="text-xs font-bold uppercase tracking-wider text-stone-600">Secure Logs</span>
-                  <button type="button" onClick={clearFirestoreHistoricBills} className="p-1 bg-rose-50 text-rose-600 border border-rose-100 rounded text-[10px] font-bold uppercase flex items-center gap-1"><i className="fa-solid fa-trash-can"></i> Clear Logs</button>
-                </div>
-                <div className="space-y-1.5">
-                  {getSecureLogBills().map(b => (
-                    <div key={b.id} className="border bg-white rounded-lg p-2 text-xs space-y-1">
-                      <div className="flex justify-between font-bold">
-                        <span className="uppercase text-stone-950">{b.customerName} ({b.customerCity})</span>
-                        <span className="font-mono">{Math.round(b.totalAmount || 0)}</span>
+              <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-3 flex flex-col min-h-0">
+                
+                {/* 2. INLINE "abhi" PREDICTIVE METRICS DASHBOARD (Scrollable and positioned on top) */}
+                {isVerified && abhiData && (
+                  <div className="bg-stone-900 text-white rounded-xl border border-stone-800 p-3.5 space-y-3.5 max-h-96 overflow-y-auto custom-scroll shadow-md flex-shrink-0 animate-slide-up">
+                    <div className="flex justify-between items-center border-b border-stone-800 pb-1.5">
+                      <span className="text-xs font-black uppercase text-amber-400 tracking-wider flex items-center gap-1.5">
+                        <i className="fa-solid fa-chart-line"></i> "abhi" Analytics Runway
+                      </span>
+                    </div>
+
+                    {/* Sales Extremes Widgets */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80">
+                        <span className="block text-[8px] text-stone-400 uppercase font-black">Max Amount Product (Revenue)</span>
+                        <span className="block text-xs font-bold text-amber-400 mt-1 truncate">{abhiData.maxAmountProduct ? abhiData.maxAmountProduct.name : "None"}</span>
+                        <span className="text-[10px] text-stone-300 font-mono mt-0.5 block">Sum: ₹{abhiData.maxAmountProduct ? Math.round(abhiData.maxAmountProduct.totalRevenue) : 0}</span>
                       </div>
-                      <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono">
-                        <span>{b.formattedDateTime || b.date}</span>
-                        <div className="flex items-center gap-1">
-                          <span className="text-emerald-600 font-sans">{b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}</span>
-                          <button type="button" onClick={() => handleLogsItemPrint(b)} className="px-1.5 py-0.5 bg-stone-100 border rounded text-[9px]">Print</button>
-                          <button type="button" onClick={() => sharePDFReceipt(b.items, b.customerName, b.customerCity, b.date)} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 border rounded text-[9px]">Share</button>
-                          <button type="button" onClick={() => handleLoadHistoricalBill(b)} className="px-1.5 py-0.5 bg-stone-800 text-white rounded text-[9px]">Load</button>
-                        </div>
+                      <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80">
+                        <span className="block text-[8px] text-stone-400 uppercase font-black">Max Quantity Product</span>
+                        <span className="block text-xs font-bold text-emerald-400 mt-1 truncate">{abhiData.maxQtyProduct ? abhiData.maxQtyProduct.name : "None"}</span>
+                        <span className="text-[10px] text-stone-300 font-mono mt-0.5 block">Volume: {abhiData.maxQtyProduct ? Math.round(abhiData.maxQtyProduct.totalQty) : 0} units</span>
                       </div>
                     </div>
-                  ))}
+
+                    {/* Revenue Contribution percentage per product */}
+                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-2">
+                      <span className="block text-[8.5px] text-stone-400 uppercase font-black">Product Revenue Contribution %</span>
+                      <div className="space-y-1.5">
+                        {abhiData.predictions.slice(0, 3).map((p, idx) => {
+                          const totalRevenue = cloudBills.reduce((acc, b) => acc + (b.totalAmount || 0), 0);
+                          const pct = totalRevenue > 0 ? Math.round((p.revenue / totalRevenue) * 100) : 0;
+                          return (
+                            <div key={idx} className="space-y-0.5 text-[10px]">
+                              <div className="flex justify-between">
+                                <span className="font-bold uppercase text-stone-300">{p.name}</span>
+                                <span className="font-mono text-amber-400 font-extrabold">{pct}%</span>
+                              </div>
+                              <div className="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
+                                <div className="bg-amber-400 h-1 rounded-full" style={{ width: `${pct}%` }}></div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Dead Stock Alert Widget (Critical for business health) */}
+                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
+                      <span className="block text-[8.5px] text-rose-400 uppercase font-black flex items-center gap-1">
+                        <i className="fa-solid fa-triangle-exclamation"></i> Dead Stock Alerts (0 Sales)
+                      </span>
+                      {abhiData.deadStock.length > 0 ? (
+                        <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto custom-scroll">
+                          {abhiData.deadStock.map((item, idx) => (
+                            <span key={idx} className="text-[9px] bg-rose-500/10 border border-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded-full uppercase font-bold tracking-wider">
+                              {item}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[9px] text-stone-400 italic">No dead stock recorded! All items are active.</p>
+                      )}
+                    </div>
+
+                    {/* Next Period Sales Forecast Run-rate calculations */}
+                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
+                      <span className="block text-[8.5px] text-stone-400 uppercase font-black">Run-Rate Sales Forecast Model</span>
+                      <div className="overflow-x-auto custom-scroll">
+                        <table className="w-full text-left text-[10px] font-mono">
+                          <thead>
+                            <tr className="border-b border-stone-800 text-stone-400 text-[8.5px]">
+                              <th className="py-1">PRODUCT</th>
+                              <th className="py-1 text-center">W-FCAST</th>
+                              <th className="py-1 text-center text-amber-300">M-FCAST</th>
+                              <th className="py-1 text-center text-emerald-300">Q-FCAST</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-800">
+                            {abhiData.predictions.map((p, i) => (
+                              <tr key={i} className="hover:bg-stone-800/40">
+                                <td className="py-1 font-bold uppercase truncate max-w-[100px] font-sans text-stone-300">{p.name}</td>
+                                <td className="py-1 text-center font-bold">{p.nextWeek}</td>
+                                <td className="py-1 text-center font-bold text-amber-300">{p.nextMonth}</td>
+                                <td className="py-1 text-center font-bold text-emerald-300">{p.nextQuarter}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Customer Buying Matrix */}
+                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
+                      <span className="block text-[8.5px] text-stone-400 uppercase font-black">Customer Buying Matrix</span>
+                      <div className="max-h-36 overflow-y-auto custom-scroll divide-y divide-stone-800">
+                        {abhiData.customerSegmentList.map((cs, idx) => (
+                          <div key={idx} className="py-1.5 flex justify-between items-center text-[10px]">
+                            <span className="font-bold uppercase text-stone-300">{cs.customer}</span>
+                            <div className="text-right space-y-0.5">
+                              <span className="block text-[9px] text-stone-400">Monthly Top: <span className="text-amber-400 font-bold uppercase">{cs.monthly}</span></span>
+                              <span className="block text-[9px] text-stone-400">Quarterly Top: <span className="text-emerald-400 font-bold uppercase">{cs.quarterly}</span></span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Cross-selling bundles */}
+                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
+                      <span className="block text-[8.5px] text-amber-400 uppercase font-black font-sans">Co-Occurrence Bundles (Cross-Selling)</span>
+                      <div className="space-y-1">
+                        {abhiData.bundles.length > 0 ? abhiData.bundles.map((b, i) => (
+                          <div key={i} className="text-[10px] bg-stone-800 p-1.5 rounded flex justify-between items-center font-sans">
+                            <span className="font-bold text-stone-300 uppercase">{b.pair}</span>
+                            <span className="text-[8.5px] text-amber-400 font-black">Count: {b.count}</span>
+                          </div>
+                        )) : <p className="text-[9px] text-stone-400 italic">No bundle configurations found.</p>}
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+
+                {/* Historic Logs Listing */}
+                <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0">
+                  <div className="flex justify-between items-center border-b pb-1">
+                    <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">Audit Ledger Log Entries</span>
+                    <span className="text-[9px] text-stone-400 font-mono">Synced bills: {cloudBills.length}</span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {getSecureLogBills().map(b => (
+                      <div key={b.id} className="border bg-white rounded-lg p-2 text-xs space-y-1 animate-slide-up">
+                        <div className="flex justify-between font-bold">
+                          <span className="uppercase text-stone-950 truncate max-w-[200px]">{b.customerName} ({b.customerCity})</span>
+                          <span className="font-mono text-stone-800">₹{Math.round(b.totalAmount || 0)}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
+                          <span>{b.formattedDateTime || b.date}</span>
+                          <div className="flex items-center gap-1">
+                            <span className="text-emerald-600 font-sans mr-1">{b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}</span>
+                            
+                            {/* FIXED Logs Print & Share Buttons: Spools directly with zero lag */}
+                            <button 
+                              type="button" 
+                              onClick={() => handleLogsItemPrint(b)} 
+                              className="px-1.5 py-0.5 bg-stone-100 hover:bg-stone-200 border rounded text-[9px] uppercase font-bold"
+                            >
+                              Print
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => sharePDFReceipt(b.items, b.customerName, b.customerCity, b.date)} 
+                              className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border rounded text-[9px] uppercase font-bold"
+                            >
+                              Share
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => handleLoadHistoricalBill(b)} 
+                              className="px-1.5 py-0.5 bg-stone-900 text-white rounded text-[9px] uppercase font-bold"
+                            >
+                              Load
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Clean Password block accepting "ab" as verification passcode */}
+                  {!isVerified && (
+                    <div className="pt-2 text-center">
+                      <input 
+                        type="password" 
+                        name={`random_pass_${Math.random()}`}
+                        autocomplete="new-password"
+                        placeholder="Passcode..." 
+                        value={passwordInput}
+                        onChange={(e) => {
+                          setPasswordInput(e.target.value);
+                          if (e.target.value === "ab") setIsVerified(true);
+                        }}
+                        className="w-28 text-center p-1.5 border rounded-lg text-xs font-mono focus:outline-none focus:border-stone-800 font-bold bg-white"
+                      />
+                    </div>
+                  )}
                 </div>
 
-                {!isVerified && (
-                  <div className="pt-2 border-t text-center space-y-1">
-                    <input 
-                      type="password" 
-                      placeholder="Enter Code..." 
-                      value={passwordInput}
-                      onChange={(e) => {
-                        setPasswordInput(e.target.value);
-                        if (e.target.value === "ab") setIsVerified(true);
-                      }}
-                      className="w-28 text-center p-1 border rounded text-xs font-mono focus:outline-none"
-                    />
-                  </div>
-                )}
-
-                {isVerified && (
-                  <div className="pt-2 text-center">
-                    <button 
-                      type="button"
-                      onClick={() => {
-                        if (cloudBills.length === 0) {
-                          triggerNotification("Ensure historic logs exist prior to parsing forecast trends.");
-                        } else {
-                          setShowAbhiModal(true);
-                        }
-                      }}
-                      className="w-full py-2 bg-stone-900 text-white hover:bg-stone-800 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1 uppercase tracking-wider"
-                    >
-                      <i className="fa-solid fa-chart-line text-amber-500 animate-pulse"></i> Open "abhi" Analytics Dashboard
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 
           </main>
-
-          {/* Sticky Customer configurations immediately above the 4 Tab navigators */}
-          <div className="bg-white p-2 border-t border-stone-200 w-full max-w-md mx-auto z-40 shadow-md">
-            <div className="flex gap-1.5 items-center font-sans">
-              <button type="button" onClick={triggerNewBillConfirmation} className="p-2 bg-rose-600 text-white rounded font-extrabold"><i className="fa-solid fa-plus-circle text-xs"></i></button>
-              <button type="button" onClick={syncSheetsCustomersToFirestore} title="Sync Sheets Customer database to Cloud" className="p-2 bg-stone-100 border text-stone-700 rounded"><i className="fa-solid fa-sync"></i></button>
-              
-              <div className="flex-grow min-w-0 relative" ref={custRef}>
-                <input 
-                  type="text" 
-                  placeholder="Search Sheets customer..."
-                  value={customerName}
-                  onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
-                  onFocus={() => setShowCustSuggestions(true)}
-                  className="w-full px-2 py-1.5 text-xs bg-stone-50 border rounded font-bold focus:border-stone-500 focus:outline-none"
-                />
-                {showCustSuggestions && dbCustomers.length > 0 && (
-                  <div className="absolute bottom-full mb-1 left-0 right-0 max-h-40 overflow-y-auto bg-white border rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
-                    {dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase())).map((c, i) => (
-                      <div key={i} onMouseDown={() => { handleCustomerSearchAndSelect(c.name); setShowCustSuggestions(false); }} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
-                        <span>{c.name}</span>
-                        {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <input type="text" placeholder="City" value={customerCity} onChange={e => setCustomerCity(e.target.value)} className="w-14 px-1 py-1.5 text-xs bg-stone-50 border rounded text-center focus:outline-none font-bold"/>
-              
-              <div className="flex items-center gap-0.5">
-                <span className="text-[8px] text-stone-400 font-extrabold">X%:</span>
-                <input type="number" placeholder="0" value={discountX} onChange={e => setDiscountX(e.target.value)} className="w-8 px-0.5 py-1.5 text-xs bg-stone-50 border rounded text-center font-mono font-bold focus:outline-none"/>
-              </div>
-
-              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-1.5 rounded text-[8px] font-black tracking-wider flex items-center gap-0.5 ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600'}`}>
-                <i className="fa-brands fa-bluetooth"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
-              </button>
-            </div>
-          </div>
 
           {/* Clean App-Style Tab Navigation Bar */}
           <footer className="bg-stone-900 border-t py-2 px-4 no-print flex-shrink-0 z-40 shadow-lg">
@@ -1084,104 +1335,13 @@
             </div>
           </footer>
 
-          {/* DYNAMIC PREDICATIVE PRODUCT INSIGHTS "abhi" MODAL */}
-          {showAbhiModal && abhiData && (
-            <div className="absolute inset-0 bg-stone-900/95 z-50 flex flex-col p-4 overflow-hidden animate-slide-up text-white font-sans">
-              <div className="flex justify-between items-center border-b border-stone-800 pb-2 flex-shrink-0">
-                <span className="text-sm font-black uppercase text-amber-400 tracking-wider flex items-center gap-1.5"><i className="fa-solid fa-chart-line"></i> "abhi" Product Predictive Analytics Dashboard</span>
-                <button type="button" onClick={() => setShowAbhiModal(false)} className="text-stone-400 hover:text-white font-extrabold text-xs bg-stone-800 px-3 py-1 rounded">Close</button>
-              </div>
-
-              {/* Scrollable Metrics Body */}
-              <div className="flex-1 overflow-y-auto custom-scroll py-3 space-y-4">
-                
-                {/* Section 1: Sales Extremes */}
-                <div className="grid grid-cols-2 gap-3 flex-shrink-0">
-                  <div className="bg-stone-800 p-3 rounded-xl border border-stone-700">
-                    <span className="block text-[9px] text-stone-400 uppercase font-black">Max Amount Product (Revenue)</span>
-                    <span className="block text-sm font-bold text-amber-400 mt-1 truncate">{abhiData.maxAmountProduct ? abhiData.maxAmountProduct.name : "None"}</span>
-                    <span className="text-xs text-stone-300 font-mono mt-0.5 block">Sum: ₹{abhiData.maxAmountProduct ? Math.round(abhiData.maxAmountProduct.totalRevenue) : 0}</span>
-                  </div>
-                  <div className="bg-stone-800 p-3 rounded-xl border border-stone-700">
-                    <span className="block text-[9px] text-stone-400 uppercase font-black">Max Quantity Product</span>
-                    <span className="block text-sm font-bold text-emerald-400 mt-1 truncate">{abhiData.maxQtyProduct ? abhiData.maxQtyProduct.name : "None"}</span>
-                    <span className="text-xs text-stone-300 font-mono mt-0.5 block">Quantity: {abhiData.maxQtyProduct ? Math.round(abhiData.maxQtyProduct.totalQty) : 0} units</span>
-                  </div>
-                </div>
-
-                {/* Section 2: Predictive Product Forecasting (Week / Month / Quarter Forecasts) */}
-                <div className="bg-stone-850 p-3 rounded-xl border border-stone-700 space-y-2 animate-slide-up">
-                  <div>
-                    <h3 className="text-xs font-black uppercase tracking-wider text-amber-400">Next Period Sales Forecast</h3>
-                    <p className="text-[9px] text-stone-400 leading-tight">Advanced trend calculations based on run-rates and historical sales velocity factors.</p>
-                  </div>
-                  <div className="overflow-x-auto custom-scroll">
-                    <table className="w-full text-left text-xs font-mono">
-                      <thead>
-                        <tr className="border-b border-stone-700 text-[10px] text-stone-400">
-                          <th className="py-1">PRODUCT</th>
-                          <th className="py-1 text-center">NEXT WEEK</th>
-                          <th className="py-1 text-center text-amber-300">NEXT MONTH</th>
-                          <th className="py-1 text-center text-emerald-300">NEXT QTR</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-stone-800">
-                        {abhiData.predictions.map((p, i) => (
-                          <tr key={i} className="hover:bg-stone-800/40">
-                            <td className="py-1.5 font-bold uppercase truncate max-w-[120px] font-sans">{p.name}</td>
-                            <td className="py-1.5 text-center font-bold">{p.nextWeek}</td>
-                            <td className="py-1.5 text-center font-bold text-amber-300">{p.nextMonth}</td>
-                            <td className="py-1.5 text-center font-bold text-emerald-300">{p.nextQuarter}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Section 3: Period Sales segment bought by each customer */}
-                <div className="bg-stone-850 p-3 rounded-xl border border-stone-700 space-y-2">
-                  <div>
-                    <h3 className="text-xs font-black uppercase tracking-wider text-emerald-400">Max Quantity Bought by Each Client</h3>
-                    <p className="text-[9px] text-stone-400">Most-ordered product breakdown mapping individual accounts for customized targeting.</p>
-                  </div>
-                  <div className="max-h-40 overflow-y-auto custom-scroll divide-y divide-stone-800">
-                    {abhiData.customerSegmentList.map((cs, idx) => (
-                      <div key={idx} className="py-2 flex justify-between items-center text-xs">
-                        <span className="font-bold uppercase text-stone-300">{cs.customer}</span>
-                        <div className="text-right space-y-0.5 font-sans">
-                          <span className="block text-[10px] text-stone-400">Monthly Top: <span className="text-amber-400 font-bold uppercase">{cs.monthly}</span></span>
-                          <span className="block text-[10px] text-stone-400">Quarterly Top: <span className="text-emerald-400 font-bold uppercase">{cs.quarterly}</span></span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Section 4: AI Smart Suggestions & Bundle cross-selling */}
-                <div className="bg-stone-800 p-3 rounded-xl border border-stone-700 space-y-2">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-amber-400 font-sans">Bundle cross-selling opportunities</h3>
-                  <div className="space-y-1.5">
-                    {abhiData.bundles.length > 0 ? abhiData.bundles.map((b, i) => (
-                      <div key={i} className="text-xs bg-stone-850 p-2 rounded border border-stone-700 flex justify-between items-center font-sans">
-                        <span className="font-bold text-stone-300 uppercase">{b.pair}</span>
-                        <span className="text-[10px] bg-amber-500/10 text-amber-400 px-2 py-0.5 rounded font-bold font-mono">Bought Together: {b.count} times</span>
-                      </div>
-                    )) : <p className="text-[10px] text-stone-400 italic">Generate bills with multiple products to display co-occurring bundles.</p>}
-                  </div>
-                </div>
-
-              </div>
-            </div>
-          )}
-
-          {/* Printable container isolating styling overrides */}
+          {/* Printable container isolating A4 hardware spooling overrides */}
           <div id="printable-bill-invoice"></div>
 
           {/* Confirmation Modals */}
           {showFastDraftConfirmModal && (
             <div className="absolute inset-0 bg-stone-900/80 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl max-w-sm w-full p-4 space-y-3">
+              <div className="bg-white rounded-2xl max-w-sm w-full p-4 space-y-3 shadow-2xl border">
                 <div className="text-stone-900 font-extrabold text-xs flex items-center gap-1 font-sans"><i className="fa-solid fa-circle-question text-amber-500"></i> Fast Draft Selection</div>
                 <p className="text-xs text-stone-600 font-semibold leading-relaxed font-sans">Do you want to clear current draft values or add items to old bill?</p>
                 <div className="flex flex-col gap-1.5 pt-1 font-sans">
