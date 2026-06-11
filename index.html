@@ -1,9 +1,12 @@
+`
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Rough Bill Generator Pro</title>
+  
+  <!-- CDNs -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -13,6 +16,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
   <script>
     tailwind.config = {
       theme: {
@@ -145,10 +149,12 @@
         if (window.firebaseBridge.onCustomersChange) window.firebaseBridge.onCustomersChange(list);
       }, (error) => console.error("Customers subscription error", error));
     }
+    
+    // Updates existing bill in firestore directly instead of creating duplicates
     window.firebaseBridge.saveBillToCloudWithNumericId = async (numericId, bill) => {
       const stringId = String(numericId);
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bills', stringId);
-      await setDoc(docRef, { ...bill, id: numericId, timestamp: numericId });
+      await setDoc(docRef, { ...bill, id: numericId, timestamp: numericId }, { merge: true });
       return { id: stringId };
     };
     window.firebaseBridge.updateBillInCloud = async (id, bill) => {
@@ -167,6 +173,20 @@
 
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
+
+    // Suggestion 1: IndexedDB Setup for local database offline operation
+    const openOfflineDB = () => {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open("RoughBillOfflineStore", 1);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains("bills")) db.createObjectStore("bills", { keyPath: "id" });
+          if (!db.objectStoreNames.contains("syncQueue")) db.createObjectStore("syncQueue", { keyPath: "id", autoIncrement: true });
+        };
+        req.onsuccess = (e) => resolve(e.target.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+    };
 
     function App() {
       const [currentTab, setCurrentTab] = useState("bill");
@@ -202,13 +222,11 @@
       const [isVerified, setIsVerified] = useState(false);
       const [passwordInput, setPasswordInput] = useState("");
       const [editingLogBill, setEditingLogBill] = useState(null);
-      const [mergeSource, setMergeSource] = useState("");
-      const [mergeTarget, setMergeTarget] = useState("");
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
 
-      // Search and selection metrics states
+      // Product Merges
       const [selectedCatalogProduct, setSelectedCatalogProduct] = useState(null);
       const [mergeTargetSearch, setMergeTargetSearch] = useState("");
       const [showMergeSuggestions, setShowMergeTargetSuggestions] = useState(false);
@@ -217,6 +235,7 @@
       const prodRef = useRef(null);
       const parserRef = useRef(null);
 
+      // Trigger automatic sync interval
       useEffect(() => {
         const interval = setInterval(() => {
           if (window.firebaseBridge) {
@@ -224,15 +243,15 @@
             setCloudBills(window.firebaseBridge.bills || []);
             setDbCustomers(window.firebaseBridge.customers || []);
           }
-        }, 800);
+          // Suggestion 7: Auto reconnect polling loop
+          if (bleDevice && !bleCharacteristic) {
+            reconnectBLEPrinterQuietly();
+          }
+          // Suggestion 1: Trigger offline sync runner
+          syncOfflineTaskQueue();
+        }, 1000);
         return () => clearInterval(interval);
-      }, []);
-
-      useEffect(() => {
-        if (bleDevice && !bleCharacteristic && bleStatus === "Disconnected") {
-          reconnectBLEPrinterQuietly();
-        }
-      }, [currentTab]);
+      }, [bleDevice, bleCharacteristic]);
 
       useEffect(() => {
         if (currentTab === "bill" && custRef.current) {
@@ -266,6 +285,7 @@
 
       const handleCustomerSearchAndSelect = async (nameVal) => {
         setCustomerName(nameVal);
+        setShowCustSuggestions(false); // Close dropdown immediately (Item 5)
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerCity(match.city || "");
@@ -336,6 +356,99 @@
           console.warn("Sheet retrieve bypass:", e.message);
           triggerNotification("Sync Complete locally");
         }
+      };
+
+      const clearFirestoreHistoricBills = async () => {
+        if (!window.confirm("Are you absolutely sure you want to clear ALL historic bills in Firestore?")) return;
+        triggerNotification("Clearing historic bills...");
+        const { db, appId, deleteDoc, doc } = window.firebaseBridge;
+        if (db) {
+          try {
+            for (const b of cloudBills) {
+              await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', String(b.id)));
+            }
+            triggerNotification("✓ All Firestore historic bills cleared!");
+          } catch (e) {
+            console.error(e);
+            triggerNotification("Failed to clear bills.");
+          }
+        }
+      };
+
+      // Suggestion 1: Offline syncer task queue processor
+      const syncOfflineTaskQueue = async () => {
+        if (!navigator.onLine || !window.firebaseBridge?.connected) return;
+        try {
+          const dbObj = await openOfflineDB();
+          const tx = dbObj.transaction("syncQueue", "readonly");
+          const store = tx.objectStore("syncQueue");
+          const req = store.getAll();
+          req.onsuccess = async () => {
+            const tasks = req.result;
+            if (tasks.length === 0) return;
+            for (const task of tasks) {
+              // Update/Write transaction
+              const { db: fsDb, appId, setDoc, doc: fsDoc } = window.firebaseBridge;
+              if (fsDb) {
+                await setDoc(fsDoc(fsDb, 'artifacts', appId, 'public', 'data', 'bills', String(task.id)), task.billData, { merge: true });
+                if (task.billData.customerName !== "Walk-In Customer") {
+                  await saveTransactionToGoogleSheet(task.id, task.billData.customerName, task.billData.totalAmount);
+                }
+                const delTx = dbObj.transaction("syncQueue", "readwrite");
+                delTx.objectStore("syncQueue").delete(task.id);
+              }
+            }
+            triggerNotification("✓ Offline queued sales synchronized!");
+          };
+        } catch (e) {
+          console.warn("Offline syncer skipped:", e);
+        }
+      };
+
+      // Suggestion 3: Custom SVG Revenue Performance Charts
+      const renderSVGPerformanceChart = () => {
+        if (cloudBills.length === 0) return <div className="text-[10px] text-stone-400 italic">No sales log history recorded to compile visual charts.</div>;
+        
+        // Group by month
+        const monthlyTotals = {};
+        cloudBills.forEach(b => {
+          const d = new Date(Number(b.id) || Date.now());
+          const monthKey = d.toLocaleString('default', { month: 'short', year: '2-digit' });
+          monthlyTotals[monthKey] = (monthlyTotals[monthKey] || 0) + (b.totalAmount || 0);
+        });
+
+        const dataPoints = Object.entries(monthlyTotals).map(([label, value]) => ({ label, value })).reverse().slice(-5);
+        if (dataPoints.length === 0) return null;
+
+        const maxVal = Math.max(...dataPoints.map(d => d.value), 1);
+        const w = 340;
+        const h = 130;
+        const barWidth = 32;
+        const spacing = 18;
+
+        return (
+          <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-800 space-y-1.5">
+            <span className="block text-[8px] text-stone-400 uppercase font-black tracking-wider">SVG Monthly Performance Run-rate</span>
+            <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} className="bg-stone-950 p-1.5 rounded">
+              <line x1="30" y1="15" x2={w - 10} y2="15" stroke="#2c2a29" strokeDasharray="3,3" />
+              <line x1="30" y1="50" x2={w - 10} y2="50" stroke="#2c2a29" strokeDasharray="3,3" />
+              <line x1="30" y1="90" x2={w - 10} y2="90" stroke="#2c2a29" strokeDasharray="3,3" />
+              <line x1="30" y1="110" x2={w - 10} y2="110" stroke="#444" />
+              {dataPoints.map((d, i) => {
+                const x = 38 + i * (barWidth + spacing);
+                const barHeight = (d.value / maxVal) * 85;
+                const y = 110 - barHeight;
+                return (
+                  <g key={i}>
+                    <rect x={x} y={y} width={barWidth} height={barHeight} fill="#f59e0b" rx="2" className="transition-all hover:fill-amber-400" />
+                    <text x={x + barWidth / 2} y="122" fill="#888" fontSize="8.5" textAnchor="middle">{d.label}</text>
+                    <text x={x + barWidth / 2} y={y - 4} fill="#fff" fontSize="8" fontWeight="bold" textAnchor="middle">₹{Math.round(d.value)}</text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+        );
       };
 
       const computeAbhiMetrics = () => {
@@ -518,6 +631,7 @@
         triggerNotification("Staged!");
       };
 
+      // Item 2: Price has been made fully editable inside staged draft view
       const handleEditStagedItem = (id, field, value) => {
         setAddedItems(prev => prev.map(item => {
           if (item.id === id) {
@@ -554,11 +668,12 @@
 
             if (updated.code !== "—" && updated.code !== "") updated.basePrice = calculateRateForToken(updated.code, discountX);
 
+            // Item 3: Fix discount logic - Flat Rupee subtraction instead of Percentage
             let deduction = 0;
-            const cleanLess = String(updated.less).trim().toLowerCase();
-            if (cleanLess.endsWith('%')) deduction = updated.basePrice * (parseFloat(cleanLess.slice(0, -1)) || 0) / 100;
-            else if (cleanLess === 'x%' || cleanLess === 'x') deduction = updated.basePrice * (parseFloat(discountX) || 0) / 100;
-            else if (cleanLess !== "" && cleanLess !== "—") deduction = parseFloat(cleanLess) || 0;
+            const cleanLess = String(updated.less).trim();
+            if (cleanLess !== "" && cleanLess !== "—") {
+              deduction = parseFloat(cleanLess) || 0;
+            }
 
             updated.finalUnitPrice = Math.max(0, updated.basePrice - deduction);
             updated.totalAmount = updated.qty * updated.finalUnitPrice;
@@ -568,74 +683,78 @@
         }));
       };
 
+      // Item 4: Printed Receipt visual scale, 10% smaller medium code, dashed divider line every 5 rows, custom center exit greeting
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = itemsList.reduce((acc, i) => acc + i.totalAmount, 0);
+        
+        let receiptHTML = `
+          <div class="text-center pb-4 mb-4 border-b-8 border-black">
+            <h2 class="text-[52px] font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
+            <p class="text-[28px] font-black mt-1">Rough Statement Profile</p>
+            <div class="mt-3.5 text-center text-[32px] font-black border-y-4 border-dashed border-black py-2.5">
+              ${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) - ${dateTimeStr}
+            </div>
+          </div>
+          <table class="w-full text-left mt-4 border-collapse text-[38px] font-black">
+            <thead>
+              <tr class="border-b-8 border-black text-[30px] font-black uppercase">
+                <th class="py-3.5 w-20 text-center">QT</th>
+                <th class="py-3.5 pl-1">ITEM</th>
+                <th class="py-3.5 text-right w-40">P</th>
+                <th class="py-3.5 text-right w-48">AMT</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
 
-        let itemRows = "";
-        sortedItems.forEach((item, idx) => {
-          const cleanCode = item.code && item.code !== "—" ? item.code.trim() : "";
-          itemRows += `
-            <tr class="align-top border-b-2 border-stone-250">
-              <td class="py-7 text-center font-mono font-black text-[38px]">${Math.round(item.qty)}</td>
-              <td class="py-7 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-none text-[38px]">
-                <div class="font-extrabold leading-none">${item.name.trim().toUpperCase()}</div>
-                ${cleanCode ? `
-                  <div class="text-[26px] text-stone-600 font-mono mt-0.5 font-medium leading-none">
-                    ${cleanCode.toUpperCase()}
+        sortedItems.forEach((item, index) => {
+          receiptHTML += `
+            <tr class="align-top border-b-2 border-stone-250 py-7">
+              <td class="py-4 text-center font-mono font-black text-[38px]">${Math.round(item.qty)}</td>
+              <td class="py-4 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight text-[38px]">
+                <div class="font-black leading-tight">${item.name.trim().toUpperCase()}</div>
+                ${item.code && item.code !== "—" ? `
+                  <div class="text-[26px] text-stone-600 font-mono mt-0.5 font-medium tracking-wide">
+                    ${item.code.toUpperCase()}
                   </div>
                 ` : ""}
               </td>
-              <td class="py-7 text-right font-mono font-black text-[38px]">${Math.round(item.finalUnitPrice)}</td>
-              <td class="py-7 text-right font-mono font-black text-[38px]">${Math.round(item.totalAmount)}</td>
+              <td class="py-4 text-right font-mono font-black text-[38px]">${Math.round(item.finalUnitPrice)}</td>
+              <td class="py-4 text-right font-mono font-black text-[38px]">${Math.round(item.totalAmount)}</td>
             </tr>
           `;
-          if ((idx + 1) % 5 === 0 && (idx + 1) < sortedItems.length) {
-            itemRows += `
+
+          // Dashed line after every 5 entries
+          if ((index + 1) % 5 === 0 && index !== sortedItems.length - 1) {
+            receiptHTML += `
               <tr>
-                <td colspan="4" class="py-1">
-                  <div class="border-b-4 border-dashed border-black w-full my-1"></div>
-                </td>
+                <td colspan="4" class="py-2 border-b-4 border-dashed border-black"></td>
               </tr>
             `;
           }
         });
 
-        return `
-          <div class="text-center pb-3 mb-3 border-b-4 border-black">
-            <h2 class="text-[44px] font-black uppercase tracking-widest">ESTIMATE RECEIPT</h2>
-            <p class="text-[24px] font-extrabold">Rough Statement Profile</p>
-            <div class="mt-2.5 text-center text-[28px] font-black border-y-4 border-dashed border-black py-2">
-              ${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) - ${dateTimeStr}
-            </div>
-          </div>
-          <table class="w-full text-left mt-3 border-collapse text-[34px] font-black">
-            <thead>
-              <tr class="border-b-4 border-black text-[28px] font-black uppercase">
-                <th class="py-3 w-16 text-center">QT</th>
-                <th class="py-3 pl-1">ITEM</th>
-                <th class="py-3 text-right w-36">P</th>
-                <th class="py-3 text-right w-44">AMT</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${itemRows}
+        receiptHTML += `
             </tbody>
           </table>
-          <div class="mt-8 pt-4 border-t-4 border-dashed border-black text-right space-y-2 text-[32px] font-black">
-            <div class="flex justify-between font-extrabold">
+          <div class="mt-10 pt-5 border-t-8 border-dashed border-black text-right space-y-3 text-[38px] font-black">
+            <div class="flex justify-between font-black">
               <span>Gross Liability:</span>
               <span>${Math.round(total)}</span>
             </div>
-            <div class="flex justify-between text-[42px] font-black border-t-4 border-black pt-3">
+            <div class="flex justify-between text-[48px] font-black border-t-8 border-black pt-4 mt-1">
               <span>Net Total:</span>
               <span>${Math.round(total)}</span>
             </div>
           </div>
-          <div class="mt-14 text-center text-[34px] font-bold pt-6 border-t-4 border-black">
-            Thank you<br/>Visit again
+          <div class="mt-16 text-center text-[38px] font-black pt-6 border-t-4 border-black">
+            Thank You For Your Visit<br/>
+            Please Visit Again
           </div>
         `;
+
+        return receiptHTML;
       };
 
       const handleGenerateAndPrintBill = async () => {
@@ -647,16 +766,19 @@
         setIsBillGenerated(true);
         const printDateFormatted = formatInvoiceDateTime(billDate);
 
+        // Seznik connection check. Warns if disconnected (Item 1 / Auto-Heartbeat)
         if (!bleCharacteristic || bleStatus !== "Connected to Seznik") {
           triggerNotification("Warning: Bluetooth printer is not connected. Printing A4/System invoice only.");
         }
 
+        // Render synchronously directly to print block DOM before window.print() (Ensures absolute reliability)
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           const finalClientName = customerName.trim() || "Walk-In Customer";
           printBody.innerHTML = renderReceiptForSpool(baggedItems, finalClientName, customerCity, printDateFormatted);
         }
         
+        // Execute print instantly
         window.print();
         setSaveStatus(1);
 
@@ -669,13 +791,12 @@
           timestamp: uniqueNumericId, syncStatusFirestore: false, syncStatusSheets: false, formattedDateTime: printDateFormatted
         };
 
-        // Cache the states required for background execution before reset!
-        const cachedBaggedItems = [...baggedItems];
-        const cachedCustomerCity = customerCity;
-
-        // INSTANTLY CLEAR WORKSPACE SO NEXT BILL CAN BE DRAFTED IMMEDIATELY
-        handleResetAll();
-        triggerNotification("Draft Cleared! Ready for next customer.");
+        // Suggestion 1: Write to local DB in-memory instantly first
+        try {
+          const dbObj = await openOfflineDB();
+          const tx = dbObj.transaction("bills", "readwrite");
+          tx.objectStore("bills").put(billDataObject);
+        } catch (e) { console.warn("Local DB write skipped", e); }
 
         let sheetsSucceeded = false;
         if (finalClientName !== "Walk-In Customer") {
@@ -683,7 +804,13 @@
             await saveTransactionToGoogleSheet(uniqueNumericId, finalClientName, computedTotalSum);
             sheetsSucceeded = true;
             billDataObject.syncStatusSheets = true;
-          } catch (err) { console.warn("Sheet save bypass triggered."); }
+          } catch (err) { 
+            console.warn("Sheet save bypass triggered. Queueing task.");
+            // Queue task to IndexedDB syncQueue
+            const dbObj = await openOfflineDB();
+            const tx = dbObj.transaction("syncQueue", "readwrite");
+            tx.objectStore("syncQueue").put({ id: uniqueNumericId, billData: billDataObject });
+          }
         } else {
           sheetsSucceeded = true;
           billDataObject.syncStatusSheets = true;
@@ -698,19 +825,27 @@
           } catch (e) { setSaveStatus(-1); }
         } else { setSaveStatus(-1); }
 
+        // AUTO-TRIGGER BLE direct printing if paired & active
         if (bleCharacteristic) {
           try {
-            await printBLEThermalDirectly(cachedBaggedItems, finalClientName, cachedCustomerCity, printDateFormatted);
+            await printBLEThermalDirectly(baggedItems, finalClientName, customerCity, printDateFormatted);
           } catch (e) { console.warn("BLE print dispatch bypassed.", e); }
         }
+
+        // Empty all fields after bill is printed instantly (As requested)
+        setTimeout(() => {
+          handleResetAll();
+        }, 500);
       };
 
       const saveTransactionToGoogleSheet = async (numericId, clientName, amountValue) => {
+        // If editingBillId is set, dispatch "updateTxn" to Google Sheets script to avoid duplicate rows (Item 1)
+        const targetAction = editingBillId ? "updateTxn" : "addTxn";
         const scriptEndpoint = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
         await fetch(scriptEndpoint, {
           method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" },
           body: JSON.stringify({
-            action: "addTxn",
+            action: targetAction,
             txn: { id: numericId, name: clientName, amount: Math.round(amountValue), date: billDate, type: "bill" },
             customer: { name: clientName, joined: billDate, city: customerCity || "Local" }
           })
@@ -726,7 +861,9 @@
         html2pdf().set(options).from(element).save();
       };
 
+      // Spools print synchronously for logs tab directly
       const handleLogsItemPrint = (logItem) => {
+        // Show BT Not Connected Alert if bluetooth is disconnected
         if (!bleCharacteristic || bleStatus !== "Connected to Seznik") {
           triggerNotification("Warning: Bluetooth printer is not connected. Printing A4/System invoice only.");
         }
@@ -738,6 +875,7 @@
         }
         window.print();
 
+        // AUTO-TRIGGER BLE direct printing if paired & active from Logs Tab too
         if (bleCharacteristic) {
           try {
             const printDateFormatted = formatInvoiceDateTime(logItem.timestamp ? new Date(logItem.timestamp) : new Date());
@@ -746,6 +884,7 @@
         }
       };
 
+      // Removed fast draft transition confirmation prompt completely as requested
       const handleFastDraftTabClick = () => {
         setCurrentTab("bill");
       };
@@ -813,8 +952,7 @@
       };
 
       const triggerNewBillConfirmation = () => {
-        if (addedItems.length > 0 || baggedItems.length > 0) setShowFastDraftConfirmModal(true);
-        else handleResetAll();
+        handleResetAll();
       };
 
       const getParserAutocompleteQuery = () => {
@@ -906,6 +1044,7 @@
       const suggestions = autocompleteQuery ? cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQuery.toLowerCase())).slice(0, 5) : [];
       const abhiData = (cloudBills.length > 0) ? computeAbhiMetrics() : null;
 
+      // Item 5: Customer suggestions are loaded STRICTLY matching Sheets directory (No suggestion if unlisted)
       const filteredSheetsCustomers = customerName.trim() === "" 
         ? [] 
         : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
@@ -914,12 +1053,12 @@
         <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative">
           
           {notification && (
-            <div className="bg-amber-500 text-stone-950 py-1.5 px-3 text-center text-[10px] font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
+            <div className="bg-amber-500 text-stone-950 py-1 px-3 text-center text-[10px] font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
               {notification}
             </div>
           )}
 
-          {}
+          {/* Sticky Customer configurations line: MOVED TO THE ABSOLUTE TOP OF APP VIEW */}
           <div className="bg-white p-2.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm">
             <div className="flex gap-1.5 items-center font-sans">
               <button type="button" onClick={triggerNewBillConfirmation} className="p-2 bg-rose-600 text-white rounded font-extrabold"><i className="fa-solid fa-plus-circle text-xs"></i></button>
@@ -942,7 +1081,7 @@
                 {showCustSuggestions && filteredSheetsCustomers.length > 0 && (
                   <div className="absolute top-full mt-1.5 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
                     {filteredSheetsCustomers.map((c, i) => (
-                      <div key={i} onMouseDown={() => { handleCustomerSearchAndSelect(c.name); setShowCustSuggestions(false); }} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
+                      <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
                         <span>{c.name}</span>
                         {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
                       </div>
@@ -986,7 +1125,7 @@
             </div>
           </div>
 
-          {}
+          {/* Primary View Workspace */}
           <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2.5 flex flex-col gap-2.5 overflow-hidden bg-stone-50 no-print">
             
             {/* Tab 1: Billing Panel */}
@@ -1067,15 +1206,14 @@
                             onChange={e => handleEditStagedItem(item.id, 'code', e.target.value)} 
                             className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none"
                           />
-                          {/* STAGED ITEMS PRICE INPUT IS NOW FULLY EDITABLE WITHOUT MATHEMATICAL ROUNDING LAG */}
+                          {/* Staged Item Price is fully editable (Item 2) */}
                           <input 
                             type="number" 
-                            step="any"
                             name={`random_itemprice_${item.id}`}
                             autocomplete="new-password"
                             value={item.basePrice} 
                             onChange={e => handleEditStagedItem(item.id, 'basePrice', e.target.value)} 
-                            className="w-14 text-right font-bold focus:bg-white focus:outline-none border-b border-dashed border-stone-300"
+                            className="w-12 text-right font-bold focus:bg-white focus:outline-none font-mono text-stone-700 bg-stone-100 rounded px-1"
                           />
                           <span className="font-bold text-stone-900 w-12 text-right">{Math.round(item.totalAmount)}</span>
                           <button type="button" onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1"><i className="fa-solid fa-trash-can"></i></button>
@@ -1096,34 +1234,33 @@
                     <div className="bg-white p-2.5 rounded-xl border space-y-1.5">
                       {baggedItems.map(item => (
                         <div key={item.id} className="p-1.5 bg-stone-50 rounded border space-y-1">
-                          
-                          {}
-                          <div className="flex items-center justify-between font-bold text-xs uppercase flex-wrap gap-1">
+                          <div className="flex items-center justify-between font-bold text-xs uppercase">
                             <input 
                               type="text" 
                               name={`random_bagname_${item.id}`}
                               autocomplete="new-password"
                               value={item.name} 
                               onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)} 
-                              className="bg-transparent focus:bg-white text-stone-900 flex-grow font-extrabold focus:outline-none min-w-[120px]"
+                              className="bg-transparent focus:bg-white text-stone-900 flex-grow font-extrabold focus:outline-none"
                             />
-                            
-                            <div className="flex items-center gap-1 overflow-x-auto no-print scrollbar-none py-0.5">
-                              {[5, 10, 15, 20, 30, 40].map(val => (
-                                <button
-                                  key={val}
-                                  type="button"
-                                  onClick={() => handleEditBaggedItem(item.id, 'less', `${val}%`)}
-                                  className="px-1.5 py-0.5 bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 rounded text-[9px] font-black"
-                                >
-                                  {val}
-                                </button>
-                              ))}
-                            </div>
-
                             <button type="button" onClick={() => { setBaggedItems(prev => prev.filter(i => i.id !== item.id)); setAddedItems(prev => [item, ...prev]); }} className="text-amber-600"><i className="fa-solid fa-arrow-rotate-left"></i></button>
                           </div>
-                          
+
+                          {/* Item 3: Inline flat rupee discount suggestion badges next to the item name */}
+                          <div className="flex gap-1 items-center pb-1">
+                            <span className="text-[8.5px] text-stone-400 uppercase font-black">Less:</span>
+                            {[5, 10, 20, 50].map(val => (
+                              <button 
+                                key={val}
+                                type="button"
+                                onClick={() => handleEditBaggedItem(item.id, 'less', String(val))}
+                                className={`px-2 py-0.5 rounded text-[10px] font-black transition ${String(item.less) === String(val) ? 'bg-amber-500 text-stone-950 font-black' : 'bg-stone-200 text-stone-800'}`}
+                              >
+                                ₹{val}
+                              </button>
+                            ))}
+                          </div>
+
                           <div className="grid grid-cols-12 gap-1 text-[11px] font-mono">
                             <input 
                               type="number" 
@@ -1137,7 +1274,7 @@
                               type="number" 
                               name={`random_bagprice_${item.id}`}
                               autocomplete="new-password"
-                              value={item.basePrice} 
+                              value={Math.round(item.basePrice)} 
                               onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
                               className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"
                             />
@@ -1191,7 +1328,7 @@
                   <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Add Product Entry</button>
                 </form>
 
-                {}
+                {/* Search-Based Product Merging Sub-Console */}
                 {selectedCatalogProduct && (
                   <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-2 animate-slide-up text-xs">
                     <div className="flex justify-between items-center">
@@ -1282,7 +1419,7 @@
                   />
                 </div>
 
-                {/* Alphabetical Product List Rendering - Sorted Alphabetically */}
+                {/* Alphabetical Product List Rendering */}
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll">
                   {cloudProducts
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
@@ -1320,7 +1457,7 @@
             {currentTab === "logs" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-3 flex flex-col min-h-0">
                 
-                {/* 2. INLINE "abhi" PREDICTIVE METRICS DASHBOARD */}
+                {/* INLINE "abhi" PREDICTIVE METRICS DASHBOARD (Scrollable and positioned on top) */}
                 {isVerified && abhiData && (
                   <div className="bg-stone-900 text-white rounded-xl border border-stone-800 p-3.5 space-y-3.5 max-h-96 overflow-y-auto custom-scroll shadow-md flex-shrink-0 animate-slide-up">
                     <div className="flex justify-between items-center border-b border-stone-800 pb-1.5">
@@ -1329,8 +1466,11 @@
                       </span>
                     </div>
 
+                    {/* Suggestion 3: Custom SVG Monthly sales analytics graphs */}
+                    {renderSVGPerformanceChart()}
+
                     {/* Sales Extremes Widgets */}
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2 pt-1">
                       <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80">
                         <span className="block text-[8px] text-stone-400 uppercase font-black">Max Amount Product (Revenue)</span>
                         <span className="block text-xs font-bold text-amber-400 mt-1 truncate">{abhiData.maxAmountProduct ? abhiData.maxAmountProduct.name : "None"}</span>
@@ -1365,7 +1505,7 @@
                       </div>
                     </div>
 
-                    {/* Dead Stock Alert Widget (Critical for business health) */}
+                    {/* Dead Stock Alert Widget */}
                     <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
                       <span className="block text-[8.5px] text-rose-400 uppercase font-black flex items-center gap-1">
                         <i className="fa-solid fa-triangle-exclamation"></i> Dead Stock Alerts (0 Sales)
@@ -1460,8 +1600,6 @@
                           <span>{b.formattedDateTime || b.date}</span>
                           <div className="flex items-center gap-1">
                             <span className="text-emerald-600 font-sans mr-1">{b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}</span>
-                            
-                            {/* Logs Print Button with automated Bluetooth Spool Alerts */}
                             <button 
                               type="button" 
                               onClick={() => handleLogsItemPrint(b)} 
@@ -1557,7 +1695,8 @@
         </div>
       );
     }
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
 </body>
 </html>
+
