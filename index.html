@@ -1,4 +1,4 @@
-`
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -149,8 +149,6 @@
         if (window.firebaseBridge.onCustomersChange) window.firebaseBridge.onCustomersChange(list);
       }, (error) => console.error("Customers subscription error", error));
     }
-    
-    // Updates existing bill in firestore directly instead of creating duplicates
     window.firebaseBridge.saveBillToCloudWithNumericId = async (numericId, bill) => {
       const stringId = String(numericId);
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bills', stringId);
@@ -173,20 +171,6 @@
 
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
-
-    // Suggestion 1: IndexedDB Setup for local database offline operation
-    const openOfflineDB = () => {
-      return new Promise((resolve, reject) => {
-        const req = indexedDB.open("RoughBillOfflineStore", 1);
-        req.onupgradeneeded = (e) => {
-          const db = e.target.result;
-          if (!db.objectStoreNames.contains("bills")) db.createObjectStore("bills", { keyPath: "id" });
-          if (!db.objectStoreNames.contains("syncQueue")) db.createObjectStore("syncQueue", { keyPath: "id", autoIncrement: true });
-        };
-        req.onsuccess = (e) => resolve(e.target.result);
-        req.onerror = (e) => reject(e.target.error);
-      });
-    };
 
     function App() {
       const [currentTab, setCurrentTab] = useState("bill");
@@ -219,14 +203,17 @@
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
       const [showFastDraftConfirmModal, setShowFastDraftConfirmModal] = useState(false);
-      const [isVerified, setIsVerified] = useState(false);
-      const [passwordInput, setPasswordInput] = useState("");
-      const [editingLogBill, setEditingLogBill] = useState(null);
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
 
-      // Product Merges
+      // Group selection/less features inside bag
+      const [globalBagLess, setGlobalBagLess] = useState("");
+
+      // Embedded collapsible previews for historic log rows
+      const [visibleLogPreviews, setVisibleLogPreviews] = useState({});
+
+      // Catalog merging fields
       const [selectedCatalogProduct, setSelectedCatalogProduct] = useState(null);
       const [mergeTargetSearch, setMergeTargetSearch] = useState("");
       const [showMergeSuggestions, setShowMergeTargetSuggestions] = useState(false);
@@ -235,7 +222,6 @@
       const prodRef = useRef(null);
       const parserRef = useRef(null);
 
-      // Trigger automatic sync interval
       useEffect(() => {
         const interval = setInterval(() => {
           if (window.firebaseBridge) {
@@ -243,12 +229,9 @@
             setCloudBills(window.firebaseBridge.bills || []);
             setDbCustomers(window.firebaseBridge.customers || []);
           }
-          // Suggestion 7: Auto reconnect polling loop
           if (bleDevice && !bleCharacteristic) {
             reconnectBLEPrinterQuietly();
           }
-          // Suggestion 1: Trigger offline sync runner
-          syncOfflineTaskQueue();
         }, 1000);
         return () => clearInterval(interval);
       }, [bleDevice, bleCharacteristic]);
@@ -285,7 +268,7 @@
 
       const handleCustomerSearchAndSelect = async (nameVal) => {
         setCustomerName(nameVal);
-        setShowCustSuggestions(false); // Close dropdown immediately (Item 5)
+        setShowCustSuggestions(false);
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerCity(match.city || "");
@@ -311,6 +294,7 @@
         setAddedItems([]); setBaggedItems([]); setGeneratedItems([]); setIsBillGenerated(false); setEditingBillId(null);
         setParserInput("");
         setSaveStatus(0);
+        setGlobalBagLess("");
         setTimeout(() => {
           if (custRef.current) {
             const input = custRef.current.querySelector('input');
@@ -356,211 +340,6 @@
           console.warn("Sheet retrieve bypass:", e.message);
           triggerNotification("Sync Complete locally");
         }
-      };
-
-      const clearFirestoreHistoricBills = async () => {
-        if (!window.confirm("Are you absolutely sure you want to clear ALL historic bills in Firestore?")) return;
-        triggerNotification("Clearing historic bills...");
-        const { db, appId, deleteDoc, doc } = window.firebaseBridge;
-        if (db) {
-          try {
-            for (const b of cloudBills) {
-              await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', String(b.id)));
-            }
-            triggerNotification("✓ All Firestore historic bills cleared!");
-          } catch (e) {
-            console.error(e);
-            triggerNotification("Failed to clear bills.");
-          }
-        }
-      };
-
-      // Suggestion 1: Offline syncer task queue processor
-      const syncOfflineTaskQueue = async () => {
-        if (!navigator.onLine || !window.firebaseBridge?.connected) return;
-        try {
-          const dbObj = await openOfflineDB();
-          const tx = dbObj.transaction("syncQueue", "readonly");
-          const store = tx.objectStore("syncQueue");
-          const req = store.getAll();
-          req.onsuccess = async () => {
-            const tasks = req.result;
-            if (tasks.length === 0) return;
-            for (const task of tasks) {
-              // Update/Write transaction
-              const { db: fsDb, appId, setDoc, doc: fsDoc } = window.firebaseBridge;
-              if (fsDb) {
-                await setDoc(fsDoc(fsDb, 'artifacts', appId, 'public', 'data', 'bills', String(task.id)), task.billData, { merge: true });
-                if (task.billData.customerName !== "Walk-In Customer") {
-                  await saveTransactionToGoogleSheet(task.id, task.billData.customerName, task.billData.totalAmount);
-                }
-                const delTx = dbObj.transaction("syncQueue", "readwrite");
-                delTx.objectStore("syncQueue").delete(task.id);
-              }
-            }
-            triggerNotification("✓ Offline queued sales synchronized!");
-          };
-        } catch (e) {
-          console.warn("Offline syncer skipped:", e);
-        }
-      };
-
-      // Suggestion 3: Custom SVG Revenue Performance Charts
-      const renderSVGPerformanceChart = () => {
-        if (cloudBills.length === 0) return <div className="text-[10px] text-stone-400 italic">No sales log history recorded to compile visual charts.</div>;
-        
-        // Group by month
-        const monthlyTotals = {};
-        cloudBills.forEach(b => {
-          const d = new Date(Number(b.id) || Date.now());
-          const monthKey = d.toLocaleString('default', { month: 'short', year: '2-digit' });
-          monthlyTotals[monthKey] = (monthlyTotals[monthKey] || 0) + (b.totalAmount || 0);
-        });
-
-        const dataPoints = Object.entries(monthlyTotals).map(([label, value]) => ({ label, value })).reverse().slice(-5);
-        if (dataPoints.length === 0) return null;
-
-        const maxVal = Math.max(...dataPoints.map(d => d.value), 1);
-        const w = 340;
-        const h = 130;
-        const barWidth = 32;
-        const spacing = 18;
-
-        return (
-          <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-800 space-y-1.5">
-            <span className="block text-[8px] text-stone-400 uppercase font-black tracking-wider">SVG Monthly Performance Run-rate</span>
-            <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} className="bg-stone-950 p-1.5 rounded">
-              <line x1="30" y1="15" x2={w - 10} y2="15" stroke="#2c2a29" strokeDasharray="3,3" />
-              <line x1="30" y1="50" x2={w - 10} y2="50" stroke="#2c2a29" strokeDasharray="3,3" />
-              <line x1="30" y1="90" x2={w - 10} y2="90" stroke="#2c2a29" strokeDasharray="3,3" />
-              <line x1="30" y1="110" x2={w - 10} y2="110" stroke="#444" />
-              {dataPoints.map((d, i) => {
-                const x = 38 + i * (barWidth + spacing);
-                const barHeight = (d.value / maxVal) * 85;
-                const y = 110 - barHeight;
-                return (
-                  <g key={i}>
-                    <rect x={x} y={y} width={barWidth} height={barHeight} fill="#f59e0b" rx="2" className="transition-all hover:fill-amber-400" />
-                    <text x={x + barWidth / 2} y="122" fill="#888" fontSize="8.5" textAnchor="middle">{d.label}</text>
-                    <text x={x + barWidth / 2} y={y - 4} fill="#fff" fontSize="8" fontWeight="bold" textAnchor="middle">₹{Math.round(d.value)}</text>
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-        );
-      };
-
-      const computeAbhiMetrics = () => {
-        const productStats = {};
-        const customerStats = {};
-        const now = Date.now();
-        const oneWeek = 7 * 24 * 60 * 60 * 1000;
-        const oneMonth = 30 * 24 * 60 * 60 * 1000;
-        const oneQuarter = 90 * 24 * 60 * 60 * 1000;
-
-        cloudBills.forEach(bill => {
-          const billTime = Number(bill.timestamp) || now;
-          const custName = bill.customerName || "Walk-In Customer";
-          const items = bill.items || [];
-
-          items.forEach(item => {
-            const pName = String(item.name).toUpperCase().trim();
-            const qty = Number(item.qty) || 0;
-            const amt = Number(item.totalAmount) || 0;
-
-            if (!productStats[pName]) {
-              productStats[pName] = {
-                name: pName, totalQty: 0, totalRevenue: 0,
-                weeklyQty: 0, monthlyQty: 0, quarterlyQty: 0,
-                history: []
-              };
-            }
-            productStats[pName].totalQty += qty;
-            productStats[pName].totalRevenue += amt;
-            productStats[pName].history.push({ time: billTime, qty, amt });
-
-            const age = now - billTime;
-            if (age <= oneWeek) productStats[pName].weeklyQty += qty;
-            if (age <= oneMonth) productStats[pName].monthlyQty += qty;
-            if (age <= oneQuarter) productStats[pName].quarterlyQty += qty;
-
-            if (!customerStats[custName]) customerStats[custName] = {};
-            if (!customerStats[custName][pName]) {
-              customerStats[custName][pName] = { name: pName, totalQty: 0, weeklyQty: 0, monthlyQty: 0, quarterlyQty: 0 };
-            }
-            customerStats[custName][pName].totalQty += qty;
-            if (age <= oneWeek) customerStats[custName][pName].weeklyQty += qty;
-            if (age <= oneMonth) customerStats[custName][pName].monthlyQty += qty;
-            if (age <= oneQuarter) customerStats[custName][pName].quarterlyQty += qty;
-          });
-        });
-
-        const productList = Object.values(productStats);
-        let maxAmountProduct = null;
-        let maxQtyProduct = null;
-
-        productList.forEach(p => {
-          if (!maxAmountProduct || p.totalRevenue > maxAmountProduct.totalRevenue) maxAmountProduct = p;
-          if (!maxQtyProduct || p.totalQty > maxQtyProduct.totalQty) maxQtyProduct = p;
-        });
-
-        const predictions = productList.map(p => {
-          const thisWeekQty = p.weeklyQty;
-          let prevWeekQty = 0;
-          p.history.forEach(h => {
-            const age = now - h.time;
-            if (age > oneWeek && age <= 2 * oneWeek) prevWeekQty += h.qty;
-          });
-
-          let trendFactor = 1.0;
-          if (prevWeekQty > 0) trendFactor = Math.max(0.6, Math.min(1.8, thisWeekQty / prevWeekQty));
-
-          return {
-            name: p.name,
-            nextWeek: Math.round(thisWeekQty * trendFactor) || Math.round(p.totalQty / 12) || 0,
-            nextMonth: Math.round(p.monthlyQty * trendFactor) || Math.round(p.totalQty / 3) || 0,
-            nextQuarter: Math.round(p.quarterlyQty * trendFactor) || Math.round(p.totalQty) || 0,
-            currentRate: p.monthlyQty,
-            revenue: p.totalRevenue,
-            totalQty: p.totalQty
-          };
-        }).sort((a,b) => b.nextMonth - a.nextMonth);
-
-        const customerSegmentList = [];
-        Object.entries(customerStats).forEach(([cName, prods]) => {
-          const items = Object.values(prods);
-          let topWeekly = null, topMonthly = null, topQuarterly = null;
-          items.forEach(it => {
-            if (!topWeekly || it.weeklyQty > topWeekly.weeklyQty) topWeekly = it;
-            if (!topMonthly || it.monthlyQty > topMonthly.monthlyQty) topMonthly = it;
-            if (!topQuarterly || it.quarterlyQty > topQuarterly.quarterlyQty) topQuarterly = it;
-          });
-          customerSegmentList.push({
-            customer: cName,
-            weekly: topWeekly && topWeekly.weeklyQty > 0 ? topWeekly.name : "None",
-            monthly: topMonthly && topMonthly.monthlyQty > 0 ? topMonthly.name : "None",
-            quarterly: topQuarterly && topQuarterly.quarterlyQty > 0 ? topQuarterly.name : "None"
-          });
-        });
-
-        const bundlesFreq = {};
-        cloudBills.forEach(b => {
-          const items = (b.items || []).map(i => String(i.name).toUpperCase().trim());
-          for (let i = 0; i < items.length; i++) {
-            for (let j = i + 1; j < items.length; j++) {
-              const pair = [items[i], items[j]].sort().join(" + ");
-              bundlesFreq[pair] = (bundlesFreq[pair] || 0) + 1;
-            }
-          }
-        });
-        const bundles = Object.entries(bundlesFreq).map(([pair, count]) => ({ pair, count })).sort((a,b) => b.count - a.count).slice(0, 3);
-
-        const catalogProductsSet = new Set(cloudProducts.map(p => p.name.toUpperCase().trim()));
-        const soldProductsSet = new Set(productList.map(p => p.name.toUpperCase().trim()));
-        const deadStock = Array.from(catalogProductsSet).filter(p => !soldProductsSet.has(p));
-
-        return { maxAmountProduct, maxQtyProduct, predictions, customerSegmentList, bundles, deadStock };
       };
 
       const calculateRateForToken = (codeStr, rawX) => {
@@ -631,7 +410,6 @@
         triggerNotification("Staged!");
       };
 
-      // Item 2: Price has been made fully editable inside staged draft view
       const handleEditStagedItem = (id, field, value) => {
         setAddedItems(prev => prev.map(item => {
           if (item.id === id) {
@@ -668,7 +446,6 @@
 
             if (updated.code !== "—" && updated.code !== "") updated.basePrice = calculateRateForToken(updated.code, discountX);
 
-            // Item 3: Fix discount logic - Flat Rupee subtraction instead of Percentage
             let deduction = 0;
             const cleanLess = String(updated.less).trim();
             if (cleanLess !== "" && cleanLess !== "—") {
@@ -683,7 +460,18 @@
         }));
       };
 
-      // Item 4: Printed Receipt visual scale, 10% smaller medium code, dashed divider line every 5 rows, custom center exit greeting
+      // Bulk Discount applicator for all items inside tally bag
+      const applyGlobalBagLessDiscount = (lessAmountStr) => {
+        const amt = parseFloat(lessAmountStr) || 0;
+        setBaggedItems(prev => prev.map(item => {
+          const updated = { ...item, less: lessAmountStr };
+          updated.finalUnitPrice = Math.max(0, updated.basePrice - amt);
+          updated.totalAmount = updated.qty * updated.finalUnitPrice;
+          return updated;
+        }));
+        triggerNotification(`Applied flat ₹${amt} discount to all items!`);
+      };
+
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = itemsList.reduce((acc, i) => acc + i.totalAmount, 0);
@@ -715,7 +503,7 @@
               <td class="py-4 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight text-[38px]">
                 <div class="font-black leading-tight">${item.name.trim().toUpperCase()}</div>
                 ${item.code && item.code !== "—" ? `
-                  <div class="text-[26px] text-stone-600 font-mono mt-0.5 font-medium tracking-wide">
+                  <div class="text-[26px] text-stone-600 font-mono mt-0.5 font-medium tracking-wide leading-none">
                     ${item.code.toUpperCase()}
                   </div>
                 ` : ""}
@@ -725,7 +513,6 @@
             </tr>
           `;
 
-          // Dashed line after every 5 entries
           if ((index + 1) % 5 === 0 && index !== sortedItems.length - 1) {
             receiptHTML += `
               <tr>
@@ -757,28 +544,32 @@
         return receiptHTML;
       };
 
+      // FIXED: Dispatches synchronised target save flags preventing duplication edits
       const handleGenerateAndPrintBill = async () => {
         if (baggedItems.length === 0) return;
+        
+        // Use active editing ID synchronously if present
+        const synchronousIsEdit = !!editingBillId;
         const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
-        if (!editingBillId) setEditingBillId(String(uniqueNumericId));
+        
+        if (!editingBillId) {
+          setEditingBillId(String(uniqueNumericId));
+        }
 
         setGeneratedItems(baggedItems);
         setIsBillGenerated(true);
         const printDateFormatted = formatInvoiceDateTime(billDate);
 
-        // Seznik connection check. Warns if disconnected (Item 1 / Auto-Heartbeat)
         if (!bleCharacteristic || bleStatus !== "Connected to Seznik") {
           triggerNotification("Warning: Bluetooth printer is not connected. Printing A4/System invoice only.");
         }
 
-        // Render synchronously directly to print block DOM before window.print() (Ensures absolute reliability)
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           const finalClientName = customerName.trim() || "Walk-In Customer";
           printBody.innerHTML = renderReceiptForSpool(baggedItems, finalClientName, customerCity, printDateFormatted);
         }
         
-        // Execute print instantly
         window.print();
         setSaveStatus(1);
 
@@ -791,26 +582,14 @@
           timestamp: uniqueNumericId, syncStatusFirestore: false, syncStatusSheets: false, formattedDateTime: printDateFormatted
         };
 
-        // Suggestion 1: Write to local DB in-memory instantly first
-        try {
-          const dbObj = await openOfflineDB();
-          const tx = dbObj.transaction("bills", "readwrite");
-          tx.objectStore("bills").put(billDataObject);
-        } catch (e) { console.warn("Local DB write skipped", e); }
-
         let sheetsSucceeded = false;
         if (finalClientName !== "Walk-In Customer") {
           try {
-            await saveTransactionToGoogleSheet(uniqueNumericId, finalClientName, computedTotalSum);
+            // FIXED: we pass explicit synchronous edit-intent flags to Google Sheets to override rows properly
+            await saveTransactionToGoogleSheet(uniqueNumericId, finalClientName, computedTotalSum, synchronousIsEdit);
             sheetsSucceeded = true;
             billDataObject.syncStatusSheets = true;
-          } catch (err) { 
-            console.warn("Sheet save bypass triggered. Queueing task.");
-            // Queue task to IndexedDB syncQueue
-            const dbObj = await openOfflineDB();
-            const tx = dbObj.transaction("syncQueue", "readwrite");
-            tx.objectStore("syncQueue").put({ id: uniqueNumericId, billData: billDataObject });
-          }
+          } catch (err) { console.warn("Sheet save bypass triggered."); }
         } else {
           sheetsSucceeded = true;
           billDataObject.syncStatusSheets = true;
@@ -825,22 +604,20 @@
           } catch (e) { setSaveStatus(-1); }
         } else { setSaveStatus(-1); }
 
-        // AUTO-TRIGGER BLE direct printing if paired & active
         if (bleCharacteristic) {
           try {
             await printBLEThermalDirectly(baggedItems, finalClientName, customerCity, printDateFormatted);
           } catch (e) { console.warn("BLE print dispatch bypassed.", e); }
         }
 
-        // Empty all fields after bill is printed instantly (As requested)
         setTimeout(() => {
           handleResetAll();
         }, 500);
       };
 
-      const saveTransactionToGoogleSheet = async (numericId, clientName, amountValue) => {
-        // If editingBillId is set, dispatch "updateTxn" to Google Sheets script to avoid duplicate rows (Item 1)
-        const targetAction = editingBillId ? "updateTxn" : "addTxn";
+      const saveTransactionToGoogleSheet = async (numericId, clientName, amountValue, explicitIsEdit) => {
+        // Synchronously evaluate target edit operation to eliminate duplications inside Google Sheets (Rule 1)
+        const targetAction = explicitIsEdit ? "updateTxn" : "addTxn";
         const scriptEndpoint = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
         await fetch(scriptEndpoint, {
           method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" },
@@ -852,18 +629,53 @@
         });
       };
 
+      // FIXED: Sharing PDF Receipt with native browser share integration
       const sharePDFReceipt = (items, custName, cityVal, activeDate) => {
         const element = document.getElementById("printable-bill-invoice");
         if (!element) return;
         const printDateFormatted = formatInvoiceDateTime(activeDate);
         element.innerHTML = renderReceiptForSpool(items, custName, cityVal, printDateFormatted);
-        const options = { margin: [4, 4, 4, 4], filename: `Invoice_${getThreeLetterCode(custName)}.pdf`, html2canvas: { scale: 2 } };
-        html2pdf().set(options).from(element).save();
+        
+        const fileName = `Invoice_${getThreeLetterCode(custName)}_${activeDate}.pdf`;
+        const options = {
+          margin: [4, 4, 4, 4],
+          filename: fileName,
+          image: { type: 'jpeg', quality: 0.98 },
+          html2canvas: { scale: 2 },
+          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        };
+
+        triggerNotification("Generating PDF shareable receipt...");
+        
+        html2pdf().set(options).from(element).toPdf().output('blob').then(async (blob) => {
+          const file = new File([blob], fileName, { type: 'application/pdf' });
+          
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            try {
+              await navigator.share({
+                files: [file],
+                title: `Rough Bill - ${custName}`,
+                text: `PDF Receipt for ${custName} (${cityVal})`
+              });
+              triggerNotification("✓ Shared successfully!");
+              return;
+            } catch (shareErr) {
+              console.warn("Share failed, falling back to direct download:", shareErr);
+            }
+          }
+          
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = fileName;
+          link.click();
+          triggerNotification("✓ PDF downloaded!");
+        }).catch(err => {
+          console.error("PDF generation fail:", err);
+          triggerNotification("✗ PDF compile error");
+        });
       };
 
-      // Spools print synchronously for logs tab directly
       const handleLogsItemPrint = (logItem) => {
-        // Show BT Not Connected Alert if bluetooth is disconnected
         if (!bleCharacteristic || bleStatus !== "Connected to Seznik") {
           triggerNotification("Warning: Bluetooth printer is not connected. Printing A4/System invoice only.");
         }
@@ -875,7 +687,6 @@
         }
         window.print();
 
-        // AUTO-TRIGGER BLE direct printing if paired & active from Logs Tab too
         if (bleCharacteristic) {
           try {
             const printDateFormatted = formatInvoiceDateTime(logItem.timestamp ? new Date(logItem.timestamp) : new Date());
@@ -884,7 +695,14 @@
         }
       };
 
-      // Removed fast draft transition confirmation prompt completely as requested
+      // Toggles mini collapsible receipt preview for historic logs inline
+      const toggleLogItemPreview = (billId) => {
+        setVisibleLogPreviews(prev => ({
+          ...prev,
+          [billId]: !prev[billId]
+        }));
+      };
+
       const handleFastDraftTabClick = () => {
         setCurrentTab("bill");
       };
@@ -1042,27 +860,26 @@
 
       const autocompleteQuery = getParserAutocompleteQuery();
       const suggestions = autocompleteQuery ? cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQuery.toLowerCase())).slice(0, 5) : [];
-      const abhiData = (cloudBills.length > 0) ? computeAbhiMetrics() : null;
 
-      // Item 5: Customer suggestions are loaded STRICTLY matching Sheets directory (No suggestion if unlisted)
+      // STRICT SHEETS CUSTOMER SUGGESTIONS (Rule 5): Do not suggest if name typed is empty
       const filteredSheetsCustomers = customerName.trim() === "" 
         ? [] 
         : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
 
       return (
-        <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative">
+        <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative font-sans">
           
           {notification && (
-            <div className="bg-amber-500 text-stone-950 py-1 px-3 text-center text-[10px] font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
+            <div className="bg-amber-500 text-stone-950 py-2 px-4 text-center text-xs font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
               {notification}
             </div>
           )}
 
           {/* Sticky Customer configurations line: MOVED TO THE ABSOLUTE TOP OF APP VIEW */}
           <div className="bg-white p-2.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm">
-            <div className="flex gap-1.5 items-center font-sans">
-              <button type="button" onClick={triggerNewBillConfirmation} className="p-2 bg-rose-600 text-white rounded font-extrabold"><i className="fa-solid fa-plus-circle text-xs"></i></button>
-              <button type="button" onClick={syncSheetsCustomersToFirestore} title="Sync Sheets Customer database to Cloud" className="p-2 bg-stone-100 border text-stone-700 rounded"><i className="fa-solid fa-sync"></i></button>
+            <div className="flex gap-1.5 items-center font-sans h-12">
+              <button type="button" onClick={triggerNewBillConfirmation} className="h-10 w-10 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-extrabold shadow-sm"><i className="fa-solid fa-plus-circle text-lg"></i></button>
+              <button type="button" onClick={syncSheetsCustomersToFirestore} title="Sync Sheets Customer database to Cloud" className="h-10 w-10 flex items-center justify-center bg-stone-100 border text-stone-700 rounded-lg shadow-xs"><i className="fa-solid fa-sync"></i></button>
               
               <div className="flex-grow min-w-0 relative" ref={custRef}>
                 <input 
@@ -1072,16 +889,16 @@
                   autocorrect="off"
                   spellcheck="false"
                   autocapitalize="off"
-                  placeholder="Search Sheets customer..."
+                  placeholder="Search Customer..."
                   value={customerName}
                   onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
                   onFocus={() => setShowCustSuggestions(true)}
-                  className="w-full px-2 py-1.5 text-xs bg-stone-50 border rounded font-bold focus:border-stone-500 focus:outline-none"
+                  className="w-full px-3 py-2 h-10 text-xs bg-stone-50 border rounded-lg font-bold focus:border-stone-500 focus:outline-none"
                 />
                 {showCustSuggestions && filteredSheetsCustomers.length > 0 && (
                   <div className="absolute top-full mt-1.5 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
                     {filteredSheetsCustomers.map((c, i) => (
-                      <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-1.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
+                      <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-2 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
                         <span>{c.name}</span>
                         {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
                       </div>
@@ -1100,7 +917,7 @@
                 placeholder="City" 
                 value={customerCity} 
                 onChange={e => setCustomerCity(e.target.value)} 
-                className="w-14 px-1 py-1.5 text-xs bg-stone-50 border rounded text-center focus:outline-none font-bold"
+                className="w-14 px-1 py-2 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold"
               />
               
               <div className="flex items-center gap-0.5">
@@ -1115,12 +932,12 @@
                   placeholder="0" 
                   value={discountX} 
                   onChange={e => setDiscountX(e.target.value)} 
-                  className="w-8 px-0.5 py-1.5 text-xs bg-stone-50 border rounded text-center font-mono font-bold focus:outline-none"
+                  className="w-8 px-0.5 py-2 h-10 text-xs bg-stone-50 border rounded-lg text-center font-mono font-bold focus:outline-none"
                 />
               </div>
 
-              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-1.5 rounded text-[8px] font-black tracking-wider flex items-center gap-0.5 ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600'}`}>
-                <i className="fa-brands fa-bluetooth"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
+              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-2 h-10 rounded-lg text-[8px] font-black tracking-wider flex items-center gap-0.5 transition-colors ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600 border'}`}>
+                <i className="fa-brands fa-bluetooth text-sm"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
               </button>
             </div>
           </div>
@@ -1143,7 +960,7 @@
                           return `${m ? m[0] : "1 "}${p.name} `;
                         });
                         if (parserRef.current) parserRef.current.focus();
-                      }} className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 border rounded text-[11px] font-bold text-stone-800 whitespace-nowrap">{p.name}</button>
+                      }} className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 border rounded-lg text-[11px] font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-xs">{p.name}</button>
                     ))}
                   </div>
                 </div>
@@ -1162,11 +979,11 @@
                       placeholder="e.g. 12 sehra 40n" 
                       value={parserInput} 
                       onChange={e => setParserInput(e.target.value)} 
-                      className="w-full px-2.5 py-2 text-xs bg-stone-50 border rounded font-mono font-bold focus:border-stone-800 focus:outline-none"
+                      className="w-full px-3 py-2.5 h-11 text-xs bg-stone-50 border rounded-lg font-mono font-bold focus:border-stone-800 focus:outline-none"
                     />
                   </form>
                   {suggestions.length > 0 && (
-                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/40 backdrop-blur-lg border border-white/20 shadow-xl rounded-lg z-50 divide-y divide-white/20">
+                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/45 backdrop-blur-lg border border-white/20 shadow-xl rounded-lg z-50 divide-y divide-white/20">
                       {suggestions.map(p => (
                         <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-white/30 text-stone-900 cursor-pointer">{p.name}</div>
                       ))}
@@ -1177,17 +994,17 @@
                 {/* Staged Items Pool */}
                 <div className="flex-grow overflow-y-auto custom-scroll pr-1">
                   {addedItems.length > 0 ? (
-                    <div className="bg-white p-2 rounded-xl border space-y-1.5">
+                    <div className="bg-white p-2.5 rounded-xl border space-y-1.5 shadow-xs">
                       {addedItems.map(item => (
-                        <div key={item.id} className="flex items-center gap-1 text-xs bg-stone-50 p-1 border rounded font-mono animate-slide-up">
-                          <button type="button" onClick={() => handleTalliedCheck(item)} className="h-5 w-5 rounded border bg-white flex items-center justify-center text-emerald-600"><i className="fa-solid fa-check text-[10px]"></i></button>
+                        <div key={item.id} className="flex items-center gap-1.5 text-xs bg-stone-50 p-1.5 border rounded-lg font-mono animate-slide-up shadow-xs">
+                          <button type="button" onClick={() => handleTalliedCheck(item)} className="h-6 w-6 rounded-md border bg-white flex items-center justify-center text-emerald-600 shadow-xs"><i className="fa-solid fa-check text-[10px]"></i></button>
                           <input 
                             type="number" 
                             name={`random_itemqty_${item.id}`}
                             autocomplete="new-password"
                             value={item.qty} 
                             onChange={e => handleEditStagedItem(item.id, 'qty', e.target.value)} 
-                            className="w-8 text-center font-bold bg-transparent focus:outline-none"
+                            className="w-8 text-center font-bold bg-transparent focus:outline-none focus:bg-white"
                           />
                           <input 
                             type="text" 
@@ -1204,23 +1021,23 @@
                             value={item.code === "—" ? "" : item.code} 
                             placeholder="Code" 
                             onChange={e => handleEditStagedItem(item.id, 'code', e.target.value)} 
-                            className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none"
+                            className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none font-bold"
                           />
-                          {/* Staged Item Price is fully editable (Item 2) */}
+                          {/* Staged Item Price is fully editable */}
                           <input 
                             type="number" 
                             name={`random_itemprice_${item.id}`}
                             autocomplete="new-password"
                             value={item.basePrice} 
                             onChange={e => handleEditStagedItem(item.id, 'basePrice', e.target.value)} 
-                            className="w-12 text-right font-bold focus:bg-white focus:outline-none font-mono text-stone-700 bg-stone-100 rounded px-1"
+                            className="w-12 text-right font-bold focus:bg-white focus:outline-none font-mono text-stone-700 bg-stone-100 rounded px-1 h-7 border border-stone-200"
                           />
                           <span className="font-bold text-stone-900 w-12 text-right">{Math.round(item.totalAmount)}</span>
-                          <button type="button" onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1"><i className="fa-solid fa-trash-can"></i></button>
+                          <button type="button" onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1"><i className="fa-solid fa-trash-can text-sm"></i></button>
                         </div>
                       ))}
                     </div>
-                  ) : <div className="text-center text-xs text-stone-400 italic bg-white p-4 border rounded-xl">Staged items will appear here.</div>}
+                  ) : <div className="text-center text-xs text-stone-400 italic bg-white p-5 border rounded-xl shadow-xs">Staged items will appear here.</div>}
                 </div>
 
               </div>
@@ -1228,13 +1045,39 @@
 
             {/* Tab 2: Tally Bag */}
             {currentTab === "bag" && (
-              <div className="flex-grow flex flex-col gap-2 p-2.5 bg-stone-50 overflow-hidden">
-                <div className="flex-grow overflow-y-auto custom-scroll space-y-2 pr-1">
-                  {baggedItems.length === 0 ? <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border">Bag is empty. Tally check draft items.</div> : (
-                    <div className="bg-white p-2.5 rounded-xl border space-y-1.5">
+              <div className="flex-grow flex flex-col gap-2.5 p-1 bg-stone-50 overflow-hidden">
+                
+                {/* ADVANCED BAGGED OPTIONS: Flat ₹ Less Multi-Applicator Tool inside Bag */}
+                {baggedItems.length > 0 && (
+                  <div className="bg-white p-2.5 rounded-xl border border-stone-200 shadow-xs space-y-1.5 animate-slide-up flex-shrink-0">
+                    <span className="block text-[8px] font-black text-stone-400 uppercase tracking-widest leading-none">Bulk Discount Applicator</span>
+                    <div className="flex gap-2 items-center">
+                      <div className="relative flex-grow">
+                        <input 
+                          type="number"
+                          placeholder="Apply flat Less (e.g. ₹10) to ALL..."
+                          value={globalBagLess}
+                          onChange={(e) => setGlobalBagLess(e.target.value)}
+                          className="w-full px-3 py-1.5 h-9 text-xs bg-stone-50 border rounded-lg font-bold focus:outline-none focus:border-stone-500 font-mono"
+                        />
+                      </div>
+                      <button 
+                        type="button"
+                        onClick={() => applyGlobalBagLessDiscount(globalBagLess)}
+                        className="px-4 py-1.5 h-9 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded-lg text-xs uppercase tracking-wider flex items-center justify-center transition-colors shadow-xs"
+                      >
+                        Apply All
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex-grow overflow-y-auto custom-scroll space-y-2 pr-1 flex-1">
+                  {baggedItems.length === 0 ? <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border shadow-xs">Bag is empty. Tally check draft items.</div> : (
+                    <div className="bg-white p-2.5 rounded-xl border space-y-1.5 shadow-xs">
                       {baggedItems.map(item => (
-                        <div key={item.id} className="p-1.5 bg-stone-50 rounded border space-y-1">
-                          <div className="flex items-center justify-between font-bold text-xs uppercase">
+                        <div key={item.id} className="p-2 bg-stone-50 rounded-lg border space-y-1">
+                          <div className="flex items-center justify-between font-bold text-xs uppercase h-8">
                             <input 
                               type="text" 
                               name={`random_bagname_${item.id}`}
@@ -1243,32 +1086,32 @@
                               onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)} 
                               className="bg-transparent focus:bg-white text-stone-900 flex-grow font-extrabold focus:outline-none"
                             />
-                            <button type="button" onClick={() => { setBaggedItems(prev => prev.filter(i => i.id !== item.id)); setAddedItems(prev => [item, ...prev]); }} className="text-amber-600"><i className="fa-solid fa-arrow-rotate-left"></i></button>
+                            <button type="button" onClick={() => { setBaggedItems(prev => prev.filter(i => i.id !== item.id)); setAddedItems(prev => [item, ...prev]); }} className="text-amber-600 text-sm h-7 w-7 flex items-center justify-center hover:bg-stone-100 rounded-full"><i className="fa-solid fa-arrow-rotate-left"></i></button>
                           </div>
 
-                          {/* Item 3: Inline flat rupee discount suggestion badges next to the item name */}
-                          <div className="flex gap-1 items-center pb-1">
-                            <span className="text-[8.5px] text-stone-400 uppercase font-black">Less:</span>
+                          {/* Suggesions discount pills next to item names without percent symbol */}
+                          <div className="flex gap-1.5 items-center pb-1 flex-wrap">
+                            <span className="text-[8.5px] text-stone-400 uppercase font-black">Suggestions:</span>
                             {[5, 10, 20, 50].map(val => (
                               <button 
                                 key={val}
                                 type="button"
                                 onClick={() => handleEditBaggedItem(item.id, 'less', String(val))}
-                                className={`px-2 py-0.5 rounded text-[10px] font-black transition ${String(item.less) === String(val) ? 'bg-amber-500 text-stone-950 font-black' : 'bg-stone-200 text-stone-800'}`}
+                                className={`px-2.5 py-0.5 rounded text-[10px] font-black transition ${String(item.less) === String(val) ? 'bg-amber-500 text-stone-950 font-black' : 'bg-stone-200 hover:bg-stone-300 text-stone-800'}`}
                               >
                                 ₹{val}
                               </button>
                             ))}
                           </div>
 
-                          <div className="grid grid-cols-12 gap-1 text-[11px] font-mono">
+                          <div className="grid grid-cols-12 gap-1.5 text-[11px] font-mono">
                             <input 
                               type="number" 
                               name={`random_bagqty_${item.id}`}
                               autocomplete="new-password"
                               value={item.qty} 
                               onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
-                              className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"
+                              className="col-span-3 text-center border h-8 bg-white rounded-md font-bold focus:outline-none focus:border-stone-500"
                             />
                             <input 
                               type="number" 
@@ -1276,7 +1119,7 @@
                               autocomplete="new-password"
                               value={Math.round(item.basePrice)} 
                               onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
-                              className="col-span-3 text-center border bg-white rounded font-bold focus:outline-none"
+                              className="col-span-3 text-center border h-8 bg-white rounded-md font-bold focus:outline-none focus:border-stone-500"
                             />
                             <input 
                               type="text" 
@@ -1285,27 +1128,84 @@
                               placeholder="Less" 
                               value={item.less === "—" ? "" : item.less} 
                               onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
-                              className="col-span-3 text-center border bg-white rounded font-bold text-rose-700 focus:outline-none"
+                              className="col-span-3 text-center border h-8 bg-white rounded-md font-bold text-rose-700 focus:outline-none focus:border-stone-500"
                             />
-                            <div className="col-span-3 text-right font-black">{Math.round(item.totalAmount)}</div>
+                            <div className="col-span-3 text-right font-black flex items-center justify-end text-xs">₹{Math.round(item.totalAmount)}</div>
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
                   {baggedItems.length > 0 && (
-                    <div className="bg-white p-2.5 border rounded-xl flex justify-between text-xs font-bold">
+                    <div className="bg-white p-3 border rounded-xl flex justify-between text-xs font-bold shadow-xs">
                       <span>Grand Liability Summary:</span>
-                      <span className="font-mono text-sm text-amber-600 font-black">{Math.round(baggedItems.reduce((acc,i) => acc + i.totalAmount, 0))}</span>
+                      <span className="font-mono text-sm text-amber-600 font-black">₹{Math.round(baggedItems.reduce((acc,i) => acc + i.totalAmount, 0))}</span>
                     </div>
                   )}
+
+                  {/* Collapsible Bill Preview Accordion (+ Sign for Toggle) */}
+                  {baggedItems.length > 0 && (
+                    <div className="space-y-1.5 no-print">
+                      <button 
+                        type="button" 
+                        onClick={() => setShowPreview(!showPreview)} 
+                        className="w-full bg-stone-200 hover:bg-stone-300 p-2.5 rounded-lg border border-stone-350 flex justify-between items-center text-xs font-black text-stone-700"
+                      >
+                        <span><i className="fa-solid fa-receipt mr-1.5"></i> Collapsible Receipt Preview</span>
+                        <span className="text-xs font-bold">{showPreview ? '- Close Preview' : '+ Preview Bill'}</span>
+                      </button>
+
+                      {showPreview && (
+                        <div className="bg-white border border-stone-300 p-4 rounded-xl shadow-inner max-w-sm mx-auto font-mono text-xs text-black">
+                          <div className="text-center pb-2 mb-2 border-b border-dashed border-black">
+                            <h2 className="text-sm font-bold uppercase leading-none">ESTIMATE RECEIPT</h2>
+                            <p className="text-[9px]">Rough Statement Profile</p>
+                            <p className="text-[10px] font-bold mt-1">{formatInvoiceDateTime(billDate)}</p>
+                            <p className="text-[10px] font-bold mt-1">{getThreeLetterCode(customerName)} ({getThreeLetterCode(customerCity)})</p>
+                          </div>
+                          
+                          <table className="w-full text-left text-[10px]">
+                            <thead>
+                              <tr class="border-b border-black">
+                                <th className="w-6 text-center">QT</th>
+                                <th>ITEM</th>
+                                <th className="text-right w-10">P</th>
+                                <th className="text-right w-12">AMT</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {[...baggedItems].sort((a,b) => a.name.localeCompare(b.name)).map((item, idx) => (
+                                <tr key={idx} className="align-top border-b border-stone-100">
+                                  <td className="text-center font-bold">{Math.round(item.qty)}</td>
+                                  <td className="uppercase font-bold">
+                                    {item.name}
+                                    {item.code !== "—" && <span className="block text-[8px] text-stone-500 font-mono"> {item.code.toUpperCase()}</span>}
+                                  </td>
+                                  <td className="text-right">{Math.round(item.finalUnitPrice)}</td>
+                                  <td className="text-right font-bold">{Math.round(item.totalAmount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+
+                          <div className="mt-3 pt-2 border-t border-dashed border-black text-right text-[11px] font-bold">
+                            Total Due: {Math.round(baggedItems.reduce((acc, i) => acc + i.totalAmount, 0))}
+                          </div>
+                          <div className="mt-4 text-center text-[10px] font-bold border-t pt-2 border-dashed border-black">
+                            Thank You For Your Visit<br/>Please Visit Again
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                 </div>
                 {baggedItems.length > 0 && (
                   <div className="space-y-1">
-                    <button type="button" onClick={handleGenerateAndPrintBill} className="w-full py-3.5 bg-stone-900 text-white rounded-xl text-xs uppercase tracking-wider font-extrabold flex justify-center items-center gap-1.5">
+                    <button type="button" onClick={handleGenerateAndPrintBill} className="w-full py-3.5 bg-stone-900 text-white rounded-xl text-xs uppercase tracking-wider font-extrabold flex justify-center items-center gap-1.5 h-12 shadow-sm">
                       <i className="fa-solid fa-print"></i> {saveStatus === 1 ? "Saving...": "Print Bill"}
                     </button>
-                    {isBillGenerated && <button type="button" onClick={() => sharePDFReceipt(baggedItems, customerName, customerCity, billDate)} className="w-full py-1.5 bg-emerald-600 text-white rounded text-xs font-bold uppercase"><i className="fa-solid fa-share-nodes"></i> Share Receipt</button>}
+                    {isBillGenerated && <button type="button" onClick={() => sharePDFReceipt(baggedItems, customerName, customerCity, billDate)} className="w-full py-2 bg-emerald-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex justify-center items-center gap-1 h-9"><i className="fa-solid fa-share-nodes"></i> Share Receipt</button>}
                   </div>
                 )}
               </div>
@@ -1314,7 +1214,7 @@
             {/* Tab 3: Catalog Management */}
             {currentTab === "products" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
-                <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0">
+                <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0 shadow-xs">
                   <input 
                     type="text" 
                     name={`random_newprod_${Math.random()}`}
@@ -1323,19 +1223,19 @@
                     placeholder="Product Identification Name..." 
                     value={newProdName} 
                     onChange={e => setNewProdNameState(e.target.value)} 
-                    className="w-full px-2 py-1 text-xs border rounded font-bold focus:outline-none"
+                    className="w-full px-3 h-10 text-xs border rounded-lg font-bold focus:outline-none"
                   />
-                  <button type="submit" className="w-full py-1.5 bg-stone-900 text-white text-xs font-bold rounded">Add Product Entry</button>
+                  <button type="submit" className="w-full py-2 h-10 bg-stone-900 text-white text-xs font-bold rounded-lg transition-colors">Add Product Entry</button>
                 </form>
 
                 {/* Search-Based Product Merging Sub-Console */}
                 {selectedCatalogProduct && (
-                  <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-2 animate-slide-up text-xs">
+                  <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-2 animate-slide-up text-xs shadow-xs">
                     <div className="flex justify-between items-center">
                       <span className="font-extrabold text-amber-900">Merge Product: <span className="uppercase text-stone-900">{selectedCatalogProduct.name}</span></span>
                       <button type="button" onClick={() => { setSelectedCatalogProduct(null); setMergeTargetSearch(""); }} className="text-[10px] text-stone-500 underline font-bold">Cancel</button>
                     </div>
-                    <p className="text-[10px] text-amber-800 leading-tight">All staged & bagged instances of this product will be renamed to the correct target product below.</p>
+                    <p className="text-[10px] text-amber-800 leading-tight font-medium">All staged & bagged instances of this product will be renamed to the correct target product below.</p>
                     <div className="relative">
                       <input 
                         type="text"
@@ -1344,10 +1244,10 @@
                         value={mergeTargetSearch}
                         onChange={(e) => { setMergeTargetSearch(e.target.value); setShowMergeTargetSuggestions(true); }}
                         onFocus={() => setShowMergeTargetSuggestions(true)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded font-bold text-stone-800 focus:outline-none"
+                        className="w-full px-2.5 py-2 bg-white border border-amber-300 rounded-lg font-bold text-stone-800 focus:outline-none"
                       />
                       {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
-                        <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded shadow-lg z-50 divide-y divide-stone-100 mt-1">
+                        <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 mt-1">
                           {cloudProducts
                             .filter(p => p.id !== selectedCatalogProduct.id && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
                             .slice(0, 5)
@@ -1384,7 +1284,7 @@
                           return;
                         }
                         try {
-                          await window.firebaseBridge.addProductToCloud({ name: targetItem.name }); // Keep target validated
+                          await window.firebaseBridge.addProductToCloud({ name: targetItem.name });
                           await window.firebaseBridge.deleteProductFromCloud(selectedCatalogProduct.id);
                           
                           setAddedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(selectedCatalogProduct.name) ? { ...item, name: targetItem.name } : item));
@@ -1398,7 +1298,7 @@
                           triggerNotification("Merge operation failed.");
                         }
                       }}
-                      className="w-full py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded font-bold text-xs"
+                      className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shadow-xs"
                     >
                       Perform Search & Merge
                     </button>
@@ -1406,7 +1306,7 @@
                 )}
 
                 {/* Search / Filter bar for products catalog */}
-                <div className="bg-white p-2 border rounded-xl space-y-1">
+                <div className="bg-white p-2 border rounded-xl space-y-1 shadow-xs">
                   <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
                   <input 
                     type="text" 
@@ -1415,12 +1315,12 @@
                     placeholder="Filter products list..." 
                     value={productFilterQuery} 
                     onChange={e => setProductFilterQuery(e.target.value)} 
-                    className="w-full px-2.5 py-1 text-xs bg-stone-50 border rounded font-semibold focus:outline-none" 
+                    className="w-full px-2.5 py-1.5 text-xs bg-stone-50 border rounded-lg font-semibold focus:outline-none" 
                   />
                 </div>
 
                 {/* Alphabetical Product List Rendering */}
-                <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll">
+                <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs">
                   {cloudProducts
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
                     .sort((a, b) => a.name.localeCompare(b.name))
@@ -1456,133 +1356,6 @@
             {/* Tab 4: Logs & Historic Audit Ledger */}
             {currentTab === "logs" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-3 flex flex-col min-h-0">
-                
-                {/* INLINE "abhi" PREDICTIVE METRICS DASHBOARD (Scrollable and positioned on top) */}
-                {isVerified && abhiData && (
-                  <div className="bg-stone-900 text-white rounded-xl border border-stone-800 p-3.5 space-y-3.5 max-h-96 overflow-y-auto custom-scroll shadow-md flex-shrink-0 animate-slide-up">
-                    <div className="flex justify-between items-center border-b border-stone-800 pb-1.5">
-                      <span className="text-xs font-black uppercase text-amber-400 tracking-wider flex items-center gap-1.5">
-                        <i className="fa-solid fa-chart-line"></i> "abhi" Analytics Runway
-                      </span>
-                    </div>
-
-                    {/* Suggestion 3: Custom SVG Monthly sales analytics graphs */}
-                    {renderSVGPerformanceChart()}
-
-                    {/* Sales Extremes Widgets */}
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80">
-                        <span className="block text-[8px] text-stone-400 uppercase font-black">Max Amount Product (Revenue)</span>
-                        <span className="block text-xs font-bold text-amber-400 mt-1 truncate">{abhiData.maxAmountProduct ? abhiData.maxAmountProduct.name : "None"}</span>
-                        <span className="text-[10px] text-stone-300 font-mono mt-0.5 block">Sum: ₹{abhiData.maxAmountProduct ? Math.round(abhiData.maxAmountProduct.totalRevenue) : 0}</span>
-                      </div>
-                      <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80">
-                        <span className="block text-[8px] text-stone-400 uppercase font-black">Max Quantity Product</span>
-                        <span className="block text-xs font-bold text-emerald-400 mt-1 truncate">{abhiData.maxQtyProduct ? abhiData.maxQtyProduct.name : "None"}</span>
-                        <span className="text-[10px] text-stone-300 font-mono mt-0.5 block">Volume: {abhiData.maxQtyProduct ? Math.round(abhiData.maxQtyProduct.totalQty) : 0} units</span>
-                      </div>
-                    </div>
-
-                    {/* Revenue Contribution percentage per product */}
-                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-2">
-                      <span className="block text-[8.5px] text-stone-400 uppercase font-black">Product Revenue Contribution %</span>
-                      <div className="space-y-1.5">
-                        {abhiData.predictions.slice(0, 3).map((p, idx) => {
-                          const totalRevenue = cloudBills.reduce((acc, b) => acc + (b.totalAmount || 0), 0);
-                          const pct = totalRevenue > 0 ? Math.round((p.revenue / totalRevenue) * 100) : 0;
-                          return (
-                            <div key={idx} className="space-y-0.5 text-[10px]">
-                              <div className="flex justify-between">
-                                <span className="font-bold uppercase text-stone-300">{p.name}</span>
-                                <span className="font-mono text-amber-400 font-extrabold">{pct}%</span>
-                              </div>
-                              <div className="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
-                                <div className="bg-amber-400 h-1 rounded-full" style={{ width: `${pct}%` }}></div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Dead Stock Alert Widget */}
-                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
-                      <span className="block text-[8.5px] text-rose-400 uppercase font-black flex items-center gap-1">
-                        <i className="fa-solid fa-triangle-exclamation"></i> Dead Stock Alerts (0 Sales)
-                      </span>
-                      {abhiData.deadStock.length > 0 ? (
-                        <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto custom-scroll">
-                          {abhiData.deadStock.map((item, idx) => (
-                            <span key={idx} className="text-[9px] bg-rose-500/10 border border-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded-full uppercase font-bold tracking-wider">
-                              {item}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-[9px] text-stone-400 italic">No dead stock recorded! All items are active.</p>
-                      )}
-                    </div>
-
-                    {/* Next Period Sales Forecast Run-rate calculations */}
-                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
-                      <span className="block text-[8.5px] text-stone-400 uppercase font-black">Run-Rate Sales Forecast Model</span>
-                      <div className="overflow-x-auto custom-scroll">
-                        <table className="w-full text-left text-[10px] font-mono">
-                          <thead>
-                            <tr className="border-b border-stone-800 text-stone-400 text-[8.5px]">
-                              <th className="py-1">PRODUCT</th>
-                              <th className="py-1 text-center">W-FCAST</th>
-                              <th className="py-1 text-center text-amber-300">M-FCAST</th>
-                              <th className="py-1 text-center text-emerald-300">Q-FCAST</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-stone-800">
-                            {abhiData.predictions.map((p, i) => (
-                              <tr key={i} className="hover:bg-stone-800/40">
-                                <td className="py-1 font-bold uppercase truncate max-w-[100px] font-sans text-stone-300">{p.name}</td>
-                                <td className="py-1 text-center font-bold">{p.nextWeek}</td>
-                                <td className="py-1 text-center font-bold text-amber-300">{p.nextMonth}</td>
-                                <td className="py-1 text-center font-bold text-emerald-300">{p.nextQuarter}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    {/* Customer Buying Matrix */}
-                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
-                      <span className="block text-[8.5px] text-stone-400 uppercase font-black">Customer Buying Matrix</span>
-                      <div className="max-h-36 overflow-y-auto custom-scroll divide-y divide-stone-800">
-                        {abhiData.customerSegmentList.map((cs, idx) => (
-                          <div key={idx} className="py-1.5 flex justify-between items-center text-[10px]">
-                            <span className="font-bold uppercase text-stone-300">{cs.customer}</span>
-                            <div className="text-right space-y-0.5">
-                              <span className="block text-[9px] text-stone-400">Monthly Top: <span className="text-amber-400 font-bold uppercase">{cs.monthly}</span></span>
-                              <span className="block text-[9px] text-stone-400">Quarterly Top: <span className="text-emerald-400 font-bold uppercase">{cs.quarterly}</span></span>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Cross-selling bundles */}
-                    <div className="bg-stone-850 p-2.5 rounded-lg border border-stone-850/80 space-y-1.5">
-                      <span className="block text-[8.5px] text-amber-400 uppercase font-black font-sans">Co-Occurrence Bundles (Cross-Selling)</span>
-                      <div className="space-y-1">
-                        {abhiData.bundles.length > 0 ? abhiData.bundles.map((b, i) => (
-                          <div key={i} className="text-[10px] bg-stone-800 p-1.5 rounded flex justify-between items-center font-sans">
-                            <span className="font-bold text-stone-300 uppercase">{b.pair}</span>
-                            <span className="text-[8.5px] text-amber-400 font-black">Count: {b.count}</span>
-                          </div>
-                        )) : <p className="text-[9px] text-stone-400 italic">No bundle configurations found.</p>}
-                      </div>
-                    </div>
-
-                  </div>
-                )}
-
-                {/* Historic Logs Listing */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0">
                   <div className="flex justify-between items-center border-b pb-1">
                     <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">Audit Ledger Log Entries</span>
@@ -1591,15 +1364,25 @@
 
                   <div className="space-y-1.5">
                     {getSecureLogBills().map(b => (
-                      <div key={b.id} className="border bg-white rounded-lg p-2 text-xs space-y-1 animate-slide-up">
+                      <div key={b.id} className="border bg-white rounded-lg p-2.5 text-xs space-y-1 animate-slide-up shadow-xs">
                         <div className="flex justify-between font-bold">
                           <span className="uppercase text-stone-950 truncate max-w-[200px]">{b.customerName} ({b.customerCity})</span>
                           <span className="font-mono text-stone-800">₹{Math.round(b.totalAmount || 0)}</span>
                         </div>
                         <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
                           <span>{b.formattedDateTime || b.date}</span>
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1 flex-wrap">
                             <span className="text-emerald-600 font-sans mr-1">{b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}</span>
+                            
+                            {/* FIXED: Collapsible Receipt Preview (+ Sign Toggle) inside each Historic Log Entry row */}
+                            <button 
+                              type="button"
+                              onClick={() => toggleLogItemPreview(b.id)}
+                              className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded text-[9px] font-extrabold text-amber-900"
+                            >
+                              {visibleLogPreviews[b.id] ? '- Close Preview' : '+ Preview Bill'}
+                            </button>
+
                             <button 
                               type="button" 
                               onClick={() => handleLogsItemPrint(b)} 
@@ -1623,11 +1406,44 @@
                             </button>
                           </div>
                         </div>
+
+                        {/* Collapsible log preview block rendering nested inside Historic log card */}
+                        {visibleLogPreviews[b.id] && (
+                          <div className="mt-2.5 p-3.5 bg-stone-50 border border-stone-200 rounded-lg text-left font-mono text-[11px] leading-tight text-stone-850 animate-slide-up shadow-inner">
+                            <div className="text-center border-b border-dashed border-stone-400 pb-1.5 mb-1.5">
+                              <span className="font-extrabold uppercase">PREVIEW RECEIPT MANIFEST</span>
+                              <div className="text-[9px] mt-0.5 text-stone-500">ID: {b.id}</div>
+                            </div>
+                            <table className="w-full text-left text-[10px]">
+                              <thead>
+                                <tr className="border-b border-stone-400 text-stone-500">
+                                  <th className="w-6 text-center">QT</th>
+                                  <th>ITEM</th>
+                                  <th className="text-right w-10">P</th>
+                                  <th className="text-right w-12">AMT</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(b.items || []).map((item, index) => (
+                                  <tr key={index} className="border-b border-stone-200/50">
+                                    <td className="text-center font-bold text-stone-900">{Math.round(item.qty)}</td>
+                                    <td className="uppercase truncate max-w-[110px] font-sans font-bold">{item.name}</td>
+                                    <td className="text-right">{Math.round(item.finalUnitPrice)}</td>
+                                    <td className="text-right font-bold text-stone-900">{Math.round(item.totalAmount)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <div className="text-right font-black border-t border-dashed border-stone-400 pt-1.5 mt-1.5 text-stone-950">
+                              Grand Total: ₹{Math.round(b.totalAmount || 0)}
+                            </div>
+                          </div>
+                        )}
+
                       </div>
                     ))}
                   </div>
 
-                  {/* Clean Password block accepting "ab" as verification passcode */}
                   {!isVerified && (
                     <div className="pt-2 text-center">
                       <input 
@@ -1645,39 +1461,57 @@
                     </div>
                   )}
                 </div>
-
               </div>
             )}
 
           </main>
 
-          {/* Clean App-Style Tab Navigation Bar */}
-          <footer className="bg-stone-900 border-t py-2 px-4 no-print flex-shrink-0 z-40 shadow-lg">
+          {/* Clean App-Style Tab Navigation Bar: Icon and label sizing amplified */}
+          <footer className="bg-stone-900 border-t py-3 px-4 no-print flex-shrink-0 z-40 shadow-lg">
             <div className="max-w-md mx-auto flex justify-around items-center">
-              <button type="button" onClick={handleFastDraftTabClick} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all ${currentTab === "bill" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
-                <i className="fa-solid fa-receipt text-sm"></i>
-                <span className="text-[8px] font-bold uppercase tracking-wider">Fast Draft</span>
+              
+              <button 
+                type="button" 
+                onClick={handleFastDraftTabClick} 
+                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all ${currentTab === "bill" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+              >
+                <i className="fa-solid fa-receipt text-xl"></i>
+                <span className="text-[11px] font-bold uppercase tracking-wider">Fast Draft</span>
               </button>
-              <button type="button" onClick={() => setCurrentTab("bag")} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all relative ${currentTab === "bag" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
-                <i className="fa-solid fa-bag-shopping text-sm"></i>
-                <span className="text-[8px] font-bold uppercase tracking-wider">Tally Bag</span>
+
+              <button 
+                type="button" 
+                onClick={() => setCurrentTab("bag")} 
+                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all relative ${currentTab === "bag" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+              >
+                <i className="fa-solid fa-bag-shopping text-xl"></i>
+                <span className="text-[11px] font-bold uppercase tracking-wider">Tally Bag</span>
                 {baggedItems.length > 0 && <span className="absolute -top-1 right-2 bg-rose-600 text-white text-[8px] font-black h-4 w-4 rounded-full flex items-center justify-center animate-bounce">{baggedItems.length}</span>}
               </button>
-              <button type="button" onClick={() => setCurrentTab("products")} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
-                <i className="fa-solid fa-box-open text-sm"></i>
-                <span className="text-[8px] font-bold uppercase tracking-wider">Products</span>
+
+              <button 
+                type="button" 
+                onClick={() => setCurrentTab("products")} 
+                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+              >
+                <i className="fa-solid fa-box-open text-xl"></i>
+                <span className="text-[11px] font-bold uppercase tracking-wider">Products</span>
               </button>
-              <button type="button" onClick={() => setCurrentTab("logs")} className={`flex flex-col items-center gap-0.5 py-1 px-3 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}>
-                <i className="fa-solid fa-clock-rotate-left text-sm"></i>
-                <span className="text-[8px] font-bold uppercase tracking-wider">Historic</span>
+
+              <button 
+                type="button" 
+                onClick={() => setCurrentTab("logs")} 
+                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+              >
+                <i className="fa-solid fa-clock-rotate-left text-xl"></i>
+                <span className="text-[11px] font-bold uppercase tracking-wider">Historic</span>
               </button>
+
             </div>
           </footer>
 
-          {/* Printable container isolating A4 hardware spooling overrides */}
           <div id="printable-bill-invoice"></div>
 
-          {/* Confirmation Modals */}
           {showFastDraftConfirmModal && (
             <div className="absolute inset-0 bg-stone-900/80 z-50 flex items-center justify-center p-4">
               <div className="bg-white rounded-2xl max-w-sm w-full p-4 space-y-3 shadow-2xl border">
@@ -1699,4 +1533,3 @@
   </script>
 </body>
 </html>
-
