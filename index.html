@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Rough Bill Generator Pro</title>
+  <title>Rough Bill Generator Sheets Pro</title>
   
   <!-- CDNs -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -87,90 +86,72 @@
 <body class="text-stone-900 font-sans antialiased selection:bg-stone-300 bg-stone-100">
   <div id="root" class="h-[100dvh] w-full flex flex-col overflow-hidden"></div>
 
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-    import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-    import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc, updateDoc, getDoc, setDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-    const appId = 'minimalistic-rough-bill-gen';
-    const firebaseConfig = {
-      apiKey: "AIzaSyC4ha5NdXyCFOYW8QApcWohBo_6BS6wGRk",
-      authDomain: "myroughbillapp.firebaseapp.com",
-      projectId: "myroughbillapp",
-      storageBucket: "myroughbillapp.firebasestorage.app",
-      messagingSenderId: "683327665576",
-      appId: "1:683327665576:web:ecb33e232260125397199d"
-    };
-
-    let app, auth, db;
-    try {
-      app = initializeApp(firebaseConfig);
-      auth = getAuth(app);
-      db = getFirestore(app);
-    } catch (e) {
-      console.warn("Could not authenticate Firebase nodes.", e);
-    }
-
-    window.firebaseBridge = {
-      db, auth, appId, connected: false,
-      products: [], bills: [], customers: [],
-      doc, getDoc, setDoc, collection, addDoc, updateDoc, deleteDoc, getDocs
-    };
-
-    async function startSetup() {
-      if (!db) return;
-      try {
-        if (auth) await signInAnonymously(auth);
-      } catch (e) { console.warn("Auth process skipped."); }
-      window.firebaseBridge.connected = true;
-
-      onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (snapshot) => {
-        const list = [];
-        snapshot.forEach(doc => {
-          const data = doc.data();
-          if (data && data.name) list.push({ id: doc.id, ...data });
-        });
-        window.firebaseBridge.products = list;
-        if (window.firebaseBridge.onProductsChange) window.firebaseBridge.onProductsChange(list);
-      }, (error) => console.error("Products subscription error", error));
-
-      onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'bills'), (snapshot) => {
-        const list = [];
-        snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
-        list.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-        window.firebaseBridge.bills = list;
-        if (window.firebaseBridge.onBillsChange) window.firebaseBridge.onBillsChange(list);
-      }, (error) => console.error("Bills subscription error", error));
-
-      onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'customers'), (snapshot) => {
-        const list = [];
-        snapshot.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
-        window.firebaseBridge.customers = list;
-        if (window.firebaseBridge.onCustomersChange) window.firebaseBridge.onCustomersChange(list);
-      }, (error) => console.error("Customers subscription error", error));
-    }
-    window.firebaseBridge.saveBillToCloudWithNumericId = async (numericId, bill) => {
-      const stringId = String(numericId);
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'bills', stringId);
-      await setDoc(docRef, { ...bill, id: numericId, timestamp: numericId }, { merge: true });
-      return { id: stringId };
-    };
-    window.firebaseBridge.updateBillInCloud = async (id, bill) => {
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', String(id)), { ...bill, timestamp: Date.now() });
-    };
-    window.firebaseBridge.addProductToCloud = async (prod) => {
-      const list = window.firebaseBridge.products;
-      const cleanName = prod.name.trim().toLowerCase().replace(/\s+/g, ' ');
-      const isDuplicate = list.some(p => p && p.name && p.name.trim().toLowerCase().replace(/\s+/g, ' ') === cleanName);
-      if (isDuplicate) return;
-      return await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { name: prod.name, timestamp: Date.now() });
-    };
-    window.firebaseBridge.deleteProductFromCloud = async (id) => await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id));
-    startSetup();
-  </script>
-
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
+
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
+
+    window.firebaseBridge = {
+      connected: true,
+      products: [],
+      bills: [],
+      customers: [],
+      
+      saveBillToCloudWithNumericId: async (numericId, bill, isEdit) => {
+        const payload = {
+          action: isEdit ? 'updateTxn' : 'addTxn',
+          txn: {
+            id: numericId,
+            name: bill.customerName,
+            amount: Math.round(bill.totalAmount),
+            date: bill.date,
+            type: "bill",
+            remarks: ""
+          },
+          items: bill.items,
+          customer: {
+            name: bill.customerName,
+            city: bill.customerCity || "Local",
+            discount: bill.discountRate,
+            joined: bill.date.split(" ")[0]
+          }
+        };
+
+        await fetch(SCRIPT_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify(payload)
+        });
+        return { id: String(numericId) };
+      },
+
+      addProductToCloud: async (prod) => {
+        const payload = {
+          action: 'addProduct',
+          name: prod.name
+        };
+        await fetch(SCRIPT_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify(payload)
+        });
+      },
+
+      deleteProductFromCloud: async (name) => {
+        const payload = {
+          action: 'deleteProduct',
+          name: name
+        };
+        await fetch(SCRIPT_URL, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify(payload)
+        });
+      }
+    };
 
     function App() {
       const [currentTab, setCurrentTab] = useState("bill");
@@ -203,36 +184,68 @@
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
       const [showFastDraftConfirmModal, setShowFastDraftConfirmModal] = useState(false);
-      const [bleDevice, setBleDevice] = useState(null);
-      const [bleCharacteristic, setBleCharacteristic] = useState(null);
-      const [bleStatus, setBleStatus] = useState("Disconnected");
-
-      // Group selection/less features inside bag
-      const [globalBagLess, setGlobalBagLess] = useState("");
-
-      // Embedded collapsible previews for historic log rows
+      const [isVerified, setIsVerified] = useState(false);
+      const [passwordInput, setPasswordInput] = useState("");
       const [visibleLogPreviews, setVisibleLogPreviews] = useState({});
-
-      // Catalog merging fields
       const [selectedCatalogProduct, setSelectedCatalogProduct] = useState(null);
       const [mergeTargetSearch, setMergeTargetSearch] = useState("");
       const [showMergeSuggestions, setShowMergeTargetSuggestions] = useState(false);
+      const [bleDevice, setBleDevice] = useState(null);
+      const [bleCharacteristic, setBleCharacteristic] = useState(null);
+      const [bleStatus, setBleStatus] = useState("Disconnected");
+      const [globalBagLess, setGlobalBagLess] = useState("");
 
       const custRef = useRef(null);
       const prodRef = useRef(null);
       const parserRef = useRef(null);
 
-      useEffect(() => {
-        const interval = setInterval(() => {
-          if (window.firebaseBridge) {
-            setCloudProducts(window.firebaseBridge.products || []);
-            setCloudBills(window.firebaseBridge.bills || []);
-            setDbCustomers(window.firebaseBridge.customers || []);
+      const syncDataFromGoogleSheets = () => {
+        const callbackName = "handleSheetsSync_" + Math.floor(Math.random() * 100000);
+        window[callbackName] = (data) => {
+          if (data) {
+            if (data.customers) {
+              let parsedCustomers = [];
+              if (Array.isArray(data.customers)) {
+                parsedCustomers = data.customers;
+              } else if (typeof data.customers === "object") {
+                parsedCustomers = Object.entries(data.customers).map(([name, details]) => ({
+                  name: name,
+                  phone: details ? details.phone : "",
+                  joined: details ? details.joined : "",
+                  city: details ? (details.city || details.City || "Local") : "Local",
+                  discount: details ? (details.discount || 0) : 0
+                }));
+              }
+              setDbCustomers(parsedCustomers);
+              window.firebaseBridge.customers = parsedCustomers;
+            }
+            if (data.products) {
+              setCloudProducts(data.products);
+              window.firebaseBridge.products = data.products;
+            }
+            if (data.txns) {
+              setCloudBills(data.txns);
+              window.firebaseBridge.bills = data.txns;
+            }
           }
+          document.getElementById(callbackName)?.remove();
+          delete window[callbackName];
+        };
+
+        const script = document.createElement("script");
+        script.id = callbackName;
+        script.src = `${SCRIPT_URL}?action=getData&callback=${callbackName}`;
+        document.body.appendChild(script);
+      };
+
+      useEffect(() => {
+        syncDataFromGoogleSheets();
+        const interval = setInterval(() => {
+          syncDataFromGoogleSheets();
           if (bleDevice && !bleCharacteristic) {
             reconnectBLEPrinterQuietly();
           }
-        }, 1000);
+        }, 4000);
         return () => clearInterval(interval);
       }, [bleDevice, bleCharacteristic]);
 
@@ -266,25 +279,18 @@
         return `${day},${months[baseDate.getMonth()]} ${String(baseDate.getHours()).padStart(2, '0')}:${String(baseDate.getMinutes()).padStart(2, '0')}`;
       };
 
-      const handleCustomerSearchAndSelect = async (nameVal) => {
-        setCustomerName(nameVal);
-        setShowCustSuggestions(false);
+      const handleCustomerSearchAndSelect = (nameVal) => {
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
+          setCustomerName(match.name);
           setCustomerCity(match.city || "");
           setDiscountX(String(match.discount || 0));
+          setShowCustSuggestions(false);
         } else {
-          const { db, appId, doc, getDoc } = window.firebaseBridge;
-          if (db) {
-            try {
-              const docSnap = await getDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', nameVal.trim()));
-              if (docSnap.exists()) {
-                const data = docSnap.data();
-                setDiscountX(String(data.discount || 0));
-                setCustomerCity(data.city || "");
-              }
-            } catch (err) { console.warn(err); }
-          }
+          setCustomerName("");
+          setCustomerCity("");
+          setDiscountX("0");
+          triggerNotification("Strict Match Alert: Please select a pre-registered Sheet profile.");
         }
       };
 
@@ -306,40 +312,12 @@
       const handleLoadHistoricalBill = (historicalBillObj) => {
         setCustomerName(historicalBillObj.customerName || "");
         setCustomerCity(historicalBillObj.customerCity || "");
-        setDiscountX(String(historicalBillObj.discountRate || 0));
+        setDiscountX(String(historicalBillObj.discountRate || historicalBillObj.discount || 0));
         setBillDate(historicalBillObj.date || new Date().toISOString().split('T')[0]);
         setBaggedItems(historicalBillObj.items || []);
         setEditingBillId(String(historicalBillObj.id) || null);
         setCurrentTab("bag");
         triggerNotification("Loaded historical bill!");
-      };
-
-      const syncSheetsCustomersToFirestore = async () => {
-        triggerNotification("Syncing Sheets Customers...");
-        try {
-          const res = await fetch("https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec?action=getCustomers");
-          const list = await res.json();
-          if (Array.isArray(list)) {
-            const { db, appId, doc, setDoc } = window.firebaseBridge;
-            if (db) {
-              for (const c of list) {
-                if (c && c.name) {
-                  const cleanName = c.name.trim();
-                  await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'customers', cleanName), {
-                    name: cleanName,
-                    city: c.city || "Local",
-                    discount: parseFloat(c.discount) || 0,
-                    timestamp: Date.now()
-                  });
-                }
-              }
-              triggerNotification("✓ Customer Sync Complete!");
-            }
-          }
-        } catch (e) {
-          console.warn("Sheet retrieve bypass:", e.message);
-          triggerNotification("Sync Complete locally");
-        }
       };
 
       const calculateRateForToken = (codeStr, rawX) => {
@@ -460,7 +438,6 @@
         }));
       };
 
-      // Bulk Discount applicator for all items inside tally bag
       const applyGlobalBagLessDiscount = (lessAmountStr) => {
         const amt = parseFloat(lessAmountStr) || 0;
         setBaggedItems(prev => prev.map(item => {
@@ -544,11 +521,9 @@
         return receiptHTML;
       };
 
-      // FIXED: Dispatches synchronised target save flags preventing duplication edits
       const handleGenerateAndPrintBill = async () => {
         if (baggedItems.length === 0) return;
         
-        // Use active editing ID synchronously if present
         const synchronousIsEdit = !!editingBillId;
         const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
         
@@ -579,30 +554,18 @@
         const billDataObject = {
           id: uniqueNumericId, customerName: finalClientName, customerCity: customerCity || "Local",
           date: billDate, items: baggedItems, totalAmount: computedTotalSum, discountRate: parseFloat(discountX) || 0,
-          timestamp: uniqueNumericId, syncStatusFirestore: false, syncStatusSheets: false, formattedDateTime: printDateFormatted
+          timestamp: uniqueNumericId, syncStatusFirestore: true, syncStatusSheets: true, formattedDateTime: printDateFormatted
         };
 
-        let sheetsSucceeded = false;
-        if (finalClientName !== "Walk-In Customer") {
-          try {
-            // FIXED: we pass explicit synchronous edit-intent flags to Google Sheets to override rows properly
-            await saveTransactionToGoogleSheet(uniqueNumericId, finalClientName, computedTotalSum, synchronousIsEdit);
-            sheetsSucceeded = true;
-            billDataObject.syncStatusSheets = true;
-          } catch (err) { console.warn("Sheet save bypass triggered."); }
-        } else {
-          sheetsSucceeded = true;
-          billDataObject.syncStatusSheets = true;
+        try {
+          await window.firebaseBridge.saveBillToCloudWithNumericId(uniqueNumericId, billDataObject, synchronousIsEdit);
+          setSaveStatus(3);
+          triggerNotification("✓ Bill saved successfully to Google Sheets!");
+          handleResetAll();
+        } catch (e) {
+          setSaveStatus(-1);
+          triggerNotification("Failed to save bill.");
         }
-
-        const { db, saveBillToCloudWithNumericId } = window.firebaseBridge;
-        if (db && window.firebaseBridge.connected) {
-          try {
-            await saveBillToCloudWithNumericId(uniqueNumericId, billDataObject);
-            billDataObject.syncStatusFirestore = true;
-            setSaveStatus(sheetsSucceeded ? 3 : 2);
-          } catch (e) { setSaveStatus(-1); }
-        } else { setSaveStatus(-1); }
 
         if (bleCharacteristic) {
           try {
@@ -615,21 +578,6 @@
         }, 500);
       };
 
-      const saveTransactionToGoogleSheet = async (numericId, clientName, amountValue, explicitIsEdit) => {
-        // Synchronously evaluate target edit operation to eliminate duplications inside Google Sheets (Rule 1)
-        const targetAction = explicitIsEdit ? "updateTxn" : "addTxn";
-        const scriptEndpoint = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
-        await fetch(scriptEndpoint, {
-          method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({
-            action: targetAction,
-            txn: { id: numericId, name: clientName, amount: Math.round(amountValue), date: billDate, type: "bill" },
-            customer: { name: clientName, joined: billDate, city: customerCity || "Local" }
-          })
-        });
-      };
-
-      // FIXED: Sharing PDF Receipt with native browser share integration
       const sharePDFReceipt = (items, custName, cityVal, activeDate) => {
         const element = document.getElementById("printable-bill-invoice");
         if (!element) return;
@@ -695,7 +643,6 @@
         }
       };
 
-      // Toggles mini collapsible receipt preview for historic logs inline
       const toggleLogItemPreview = (billId) => {
         setVisibleLogPreviews(prev => ({
           ...prev,
@@ -757,12 +704,12 @@
         }
       };
 
-      const handleCatalogDelete = async (id) => {
+      const handleCatalogDelete = async (name) => {
         const { deleteProductFromCloud } = window.firebaseBridge;
         if (deleteProductFromCloud) {
           try {
-            await deleteProductFromCloud(id);
-            triggerNotification("Product deleted.");
+            await deleteProductFromCloud(name);
+            triggerNotification("Product deleted from Sheets catalog.");
           } catch (err) {
             console.error(err);
           }
@@ -773,7 +720,7 @@
         handleResetAll();
       };
 
-      const getParserAutocompleteQuery = () => {
+      const getParserAutocompleteQueryLocal = () => {
         const trimmed = parserInput.trim();
         if (!trimmed) return "";
         const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
@@ -809,20 +756,18 @@
 
         const isDuplicate = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(trimmed));
         if (isDuplicate) {
-          triggerNotification("Product already exists in catalogs!");
+          triggerNotification("Product already exists inside Sheets!");
           return;
         }
 
         const payload = { name: toTitleCase(trimmed) };
-        if (window.firebaseBridge?.connected) {
-          try {
-            await window.firebaseBridge.addProductToCloud(payload);
-            setNewProdNameState("");
-            triggerNotification("Product successfully cataloged!");
-          } catch (err) {
-            console.error(err);
-            triggerNotification("Failed to add product.");
-          }
+        try {
+          await window.firebaseBridge.addProductToCloud(payload);
+          setNewProdNameState("");
+          triggerNotification("Product synced to Google Sheets!");
+        } catch (err) {
+          console.error(err);
+          triggerNotification("Failed to add product.");
         }
       };
 
@@ -858,16 +803,27 @@
         }
       };
 
-      const autocompleteQuery = getParserAutocompleteQuery();
-      const suggestions = autocompleteQuery ? cloudProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQuery.toLowerCase())).slice(0, 5) : [];
+      const getSortedProductsLocal = () => {
+        if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
+        return [...cloudProducts]
+          .filter(p => p && typeof p === 'object' && p.name)
+          .sort((a, b) => {
+            const nameA = (a.name || "").trim();
+            const nameB = (b.name || "").trim();
+            return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+          });
+      };
 
-      // STRICT SHEETS CUSTOMER SUGGESTIONS (Rule 5): Do not suggest if name typed is empty
+      const sortedProductsLocal = getSortedProductsLocal();
+      const autocompleteQueryLocal = getParserAutocompleteQueryLocal();
+      const suggestionsLocal = autocompleteQueryLocal ? sortedProductsLocal.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
+
       const filteredSheetsCustomers = customerName.trim() === "" 
         ? [] 
         : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
 
       return (
-        <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative font-sans">
+        <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative font-sans text-stone-900">
           
           {notification && (
             <div className="bg-amber-500 text-stone-950 py-2 px-4 text-center text-xs font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50">
@@ -875,30 +831,28 @@
             </div>
           )}
 
-          {/* Sticky Customer configurations line: MOVED TO THE ABSOLUTE TOP OF APP VIEW */}
-          <div className="bg-white p-2.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm">
+          <div className="bg-white p-2.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm flex-shrink-0">
             <div className="flex gap-1.5 items-center font-sans h-12">
-              <button type="button" onClick={triggerNewBillConfirmation} className="h-10 w-10 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-extrabold shadow-sm"><i className="fa-solid fa-plus-circle text-lg"></i></button>
-              <button type="button" onClick={syncSheetsCustomersToFirestore} title="Sync Sheets Customer database to Cloud" className="h-10 w-10 flex items-center justify-center bg-stone-100 border text-stone-700 rounded-lg shadow-xs"><i className="fa-solid fa-sync"></i></button>
+              <button type="button" onClick={triggerNewBillConfirmation} className="h-11 w-11 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-extrabold shadow-sm"><i className="fa-solid fa-plus-circle text-lg"></i></button>
+              <button type="button" onClick={syncDataFromGoogleSheets} title="Sync Customer Database from Sheets" className="h-10 w-10 flex items-center justify-center bg-stone-100 border text-stone-700 rounded-lg shadow-xs"><i className="fa-solid fa-sync"></i></button>
               
               <div className="flex-grow min-w-0 relative" ref={custRef}>
                 <input 
                   type="text" 
-                  name={`random_cust_${Math.random()}`}
-                  autocomplete="new-password"
-                  autocorrect="off"
-                  spellcheck="false"
-                  autocapitalize="off"
-                  placeholder="Search Customer..."
+                  autoComplete="new-password"
+                  autoCorrect="off"
+                  spellCheck="false"
+                  autoCapitalize="off"
+                  placeholder="Search Sheets customer..."
                   value={customerName}
                   onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
                   onFocus={() => setShowCustSuggestions(true)}
-                  className="w-full px-3 py-2 h-10 text-xs bg-stone-50 border rounded-lg font-bold focus:border-stone-500 focus:outline-none"
+                  className="w-full px-3 py-2 h-11 text-xs bg-stone-50 border rounded-lg font-bold focus:border-stone-500 focus:outline-none"
                 />
                 {showCustSuggestions && filteredSheetsCustomers.length > 0 && (
                   <div className="absolute top-full mt-1.5 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
                     {filteredSheetsCustomers.map((c, i) => (
-                      <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-2 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
+                      <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-2.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
                         <span>{c.name}</span>
                         {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
                       </div>
@@ -909,51 +863,46 @@
 
               <input 
                 type="text" 
-                name={`random_city_${Math.random()}`}
-                autocomplete="new-password"
-                autocorrect="off"
-                spellcheck="false"
-                autocapitalize="off"
+                autoComplete="new-password"
+                autoCorrect="off"
+                spellCheck="false"
+                autoCapitalize="off"
                 placeholder="City" 
                 value={customerCity} 
                 onChange={e => setCustomerCity(e.target.value)} 
-                className="w-14 px-1 py-2 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold"
+                className="w-14 px-1 py-2 h-11 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold"
               />
               
               <div className="flex items-center gap-0.5">
                 <span className="text-[8px] text-stone-400 font-extrabold">X%:</span>
                 <input 
                   type="number" 
-                  name={`random_disc_${Math.random()}`}
-                  autocomplete="new-password"
-                  autocorrect="off"
-                  spellcheck="false"
-                  autocapitalize="off"
+                  autoComplete="new-password"
+                  autoCorrect="off"
+                  spellCheck="false"
+                  autoCapitalize="off"
                   placeholder="0" 
                   value={discountX} 
                   onChange={e => setDiscountX(e.target.value)} 
-                  className="w-8 px-0.5 py-2 h-10 text-xs bg-stone-50 border rounded-lg text-center font-mono font-bold focus:outline-none"
+                  className="w-8 px-0.5 h-11 text-xs bg-stone-50 border rounded-lg text-center font-mono font-bold focus:outline-none"
                 />
               </div>
 
-              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-2 h-10 rounded-lg text-[8px] font-black tracking-wider flex items-center gap-0.5 transition-colors ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600 border'}`}>
+              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-2 h-11 rounded-lg text-[8px] font-black tracking-wider flex items-center gap-0.5 transition-colors ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600 border'}`}>
                 <i className="fa-brands fa-bluetooth text-sm"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
               </button>
             </div>
           </div>
 
-          {/* Primary View Workspace */}
           <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2.5 flex flex-col gap-2.5 overflow-hidden bg-stone-50 no-print">
             
-            {/* Tab 1: Billing Panel */}
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-2.5 overflow-hidden">
                 
-                {/* Product shortcuts Matrix */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
                   <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Product Directory Shortcuts</span>
                   <div className="flex gap-1 overflow-x-auto pb-1 custom-scroll">
-                    {cloudProducts.slice(0, 15).map(p => (
+                    {sortedProductsLocal.slice(0, 15).map(p => (
                       <button key={p.id} type="button" onClick={() => {
                         setParserInput(prev => {
                           const m = prev.match(/^\d+(\.\d+)?\s+/);
@@ -965,75 +914,67 @@
                   </div>
                 </div>
 
-                {/* Fast Command Input Parser */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs relative flex-shrink-0">
                   <form onSubmit={handleParserSubmit}>
                     <input 
                       ref={parserRef} 
                       type="text" 
-                      name={`random_parser_${Math.random()}`}
-                      autocomplete="new-password"
-                      autocorrect="off"
-                      spellcheck="false"
-                      autocapitalize="off"
+                      autoComplete="new-password"
+                      autoCorrect="off"
+                      spellCheck="false"
+                      autoCapitalize="off"
                       placeholder="e.g. 12 sehra 40n" 
                       value={parserInput} 
                       onChange={e => setParserInput(e.target.value)} 
                       className="w-full px-3 py-2.5 h-11 text-xs bg-stone-50 border rounded-lg font-mono font-bold focus:border-stone-800 focus:outline-none"
                     />
                   </form>
-                  {suggestions.length > 0 && (
+                  {suggestionsLocal.length > 0 && (
                     <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/45 backdrop-blur-lg border border-white/20 shadow-xl rounded-lg z-50 divide-y divide-white/20">
-                      {suggestions.map(p => (
+                      {suggestionsLocal.map(p => (
                         <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-white/30 text-stone-900 cursor-pointer">{p.name}</div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                {/* Staged Items Pool */}
                 <div className="flex-grow overflow-y-auto custom-scroll pr-1">
                   {addedItems.length > 0 ? (
                     <div className="bg-white p-2.5 rounded-xl border space-y-1.5 shadow-xs">
                       {addedItems.map(item => (
-                        <div key={item.id} className="flex items-center gap-1.5 text-xs bg-stone-50 p-1.5 border rounded-lg font-mono animate-slide-up shadow-xs">
+                        <div key={item.id} className="flex items-center gap-1.5 text-xs bg-stone-50 p-1.5 border rounded-lg font-mono animate-slide-up shadow-xs font-sans">
                           <button type="button" onClick={() => handleTalliedCheck(item)} className="h-6 w-6 rounded-md border bg-white flex items-center justify-center text-emerald-600 shadow-xs"><i className="fa-solid fa-check text-[10px]"></i></button>
                           <input 
                             type="number" 
-                            name={`random_itemqty_${item.id}`}
-                            autocomplete="new-password"
+                            autoComplete="new-password"
                             value={item.qty} 
                             onChange={e => handleEditStagedItem(item.id, 'qty', e.target.value)} 
-                            className="w-8 text-center font-bold bg-transparent focus:outline-none focus:bg-white"
+                            className="w-8 text-center font-bold bg-transparent focus:outline-none focus:bg-white font-mono"
                           />
                           <input 
                             type="text" 
-                            name={`random_itemname_${item.id}`}
-                            autocomplete="new-password"
+                            autoComplete="new-password"
                             value={item.name} 
                             onChange={e => handleEditStagedItem(item.id, 'name', e.target.value)} 
-                            className="flex-grow truncate uppercase font-bold focus:bg-white focus:outline-none"
+                            className="flex-grow truncate uppercase font-bold focus:bg-white focus:outline-none font-sans"
                           />
                           <input 
                             type="text" 
-                            name={`random_itemcode_${item.id}`}
-                            autocomplete="new-password"
+                            autoComplete="new-password"
                             value={item.code === "—" ? "" : item.code} 
                             placeholder="Code" 
                             onChange={e => handleEditStagedItem(item.id, 'code', e.target.value)} 
-                            className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none font-bold"
+                            className="w-12 text-center text-indigo-600 focus:bg-white focus:outline-none font-bold font-mono"
                           />
-                          {/* Staged Item Price is fully editable */}
                           <input 
                             type="number" 
-                            name={`random_itemprice_${item.id}`}
-                            autocomplete="new-password"
+                            autoComplete="new-password"
                             value={item.basePrice} 
                             onChange={e => handleEditStagedItem(item.id, 'basePrice', e.target.value)} 
                             className="w-12 text-right font-bold focus:bg-white focus:outline-none font-mono text-stone-700 bg-stone-100 rounded px-1 h-7 border border-stone-200"
                           />
-                          <span className="font-bold text-stone-900 w-12 text-right">{Math.round(item.totalAmount)}</span>
-                          <button type="button" onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1"><i className="fa-solid fa-trash-can text-sm"></i></button>
+                          <span className="font-bold text-stone-900 w-12 text-right font-mono">{Math.round(item.totalAmount)}</span>
+                          <button type="button" onClick={() => setAddedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1"><i className="fa-solid fa-trash-can"></i></button>
                         </div>
                       ))}
                     </div>
@@ -1043,28 +984,24 @@
               </div>
             )}
 
-            {/* Tab 2: Tally Bag */}
             {currentTab === "bag" && (
               <div className="flex-grow flex flex-col gap-2.5 p-1 bg-stone-50 overflow-hidden">
                 
-                {/* ADVANCED BAGGED OPTIONS: Flat ₹ Less Multi-Applicator Tool inside Bag */}
                 {baggedItems.length > 0 && (
                   <div className="bg-white p-2.5 rounded-xl border border-stone-200 shadow-xs space-y-1.5 animate-slide-up flex-shrink-0">
                     <span className="block text-[8px] font-black text-stone-400 uppercase tracking-widest leading-none">Bulk Discount Applicator</span>
                     <div className="flex gap-2 items-center">
-                      <div className="relative flex-grow">
-                        <input 
-                          type="number"
-                          placeholder="Apply flat Less (e.g. ₹10) to ALL..."
-                          value={globalBagLess}
-                          onChange={(e) => setGlobalBagLess(e.target.value)}
-                          className="w-full px-3 py-1.5 h-9 text-xs bg-stone-50 border rounded-lg font-bold focus:outline-none focus:border-stone-500 font-mono"
-                        />
-                      </div>
+                      <input 
+                        type="number"
+                        placeholder="Apply flat Less (e.g. ₹10) to ALL..."
+                        value={globalBagLess}
+                        onChange={(e) => setGlobalBagLess(e.target.value)}
+                        className="w-full px-3 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg font-bold focus:outline-none focus:border-stone-500 font-mono"
+                      />
                       <button 
                         type="button"
                         onClick={() => applyGlobalBagLessDiscount(globalBagLess)}
-                        className="px-4 py-1.5 h-9 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded-lg text-xs uppercase tracking-wider flex items-center justify-center transition-colors shadow-xs"
+                        className="px-4 py-1.5 h-10 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded-lg text-xs uppercase tracking-wider flex items-center justify-center transition-colors shadow-xs"
                       >
                         Apply All
                       </button>
@@ -1076,12 +1013,11 @@
                   {baggedItems.length === 0 ? <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border shadow-xs">Bag is empty. Tally check draft items.</div> : (
                     <div className="bg-white p-2.5 rounded-xl border space-y-1.5 shadow-xs">
                       {baggedItems.map(item => (
-                        <div key={item.id} className="p-2 bg-stone-50 rounded-lg border space-y-1">
+                        <div key={item.id} className="p-1.5 bg-stone-50 rounded border space-y-1">
                           <div className="flex items-center justify-between font-bold text-xs uppercase h-8">
                             <input 
                               type="text" 
-                              name={`random_bagname_${item.id}`}
-                              autocomplete="new-password"
+                              autoComplete="new-password"
                               value={item.name} 
                               onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)} 
                               className="bg-transparent focus:bg-white text-stone-900 flex-grow font-extrabold focus:outline-none"
@@ -1089,7 +1025,6 @@
                             <button type="button" onClick={() => { setBaggedItems(prev => prev.filter(i => i.id !== item.id)); setAddedItems(prev => [item, ...prev]); }} className="text-amber-600 text-sm h-7 w-7 flex items-center justify-center hover:bg-stone-100 rounded-full"><i className="fa-solid fa-arrow-rotate-left"></i></button>
                           </div>
 
-                          {/* Suggesions discount pills next to item names without percent symbol */}
                           <div className="flex gap-1.5 items-center pb-1 flex-wrap">
                             <span className="text-[8.5px] text-stone-400 uppercase font-black">Suggestions:</span>
                             {[5, 10, 20, 50].map(val => (
@@ -1107,28 +1042,25 @@
                           <div className="grid grid-cols-12 gap-1.5 text-[11px] font-mono">
                             <input 
                               type="number" 
-                              name={`random_bagqty_${item.id}`}
-                              autocomplete="new-password"
+                              autoComplete="new-password"
                               value={item.qty} 
                               onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
-                              className="col-span-3 text-center border h-8 bg-white rounded-md font-bold focus:outline-none focus:border-stone-500"
+                              className="col-span-3 text-center border h-8 bg-white rounded-md font-bold focus:outline-none"
                             />
                             <input 
                               type="number" 
-                              name={`random_bagprice_${item.id}`}
-                              autocomplete="new-password"
+                              autoComplete="new-password"
                               value={Math.round(item.basePrice)} 
                               onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
                               className="col-span-3 text-center border h-8 bg-white rounded-md font-bold focus:outline-none focus:border-stone-500"
                             />
                             <input 
                               type="text" 
-                              name={`random_bagless_${item.id}`}
-                              autocomplete="new-password"
+                              autoComplete="new-password"
                               placeholder="Less" 
                               value={item.less === "—" ? "" : item.less} 
                               onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
-                              className="col-span-3 text-center border h-8 bg-white rounded-md font-bold text-rose-700 focus:outline-none focus:border-stone-500"
+                              className="col-span-3 text-center border h-8 bg-white rounded-md font-bold text-rose-700"
                             />
                             <div className="col-span-3 text-right font-black flex items-center justify-end text-xs">₹{Math.round(item.totalAmount)}</div>
                           </div>
@@ -1143,13 +1075,12 @@
                     </div>
                   )}
 
-                  {/* Collapsible Bill Preview Accordion (+ Sign for Toggle) */}
                   {baggedItems.length > 0 && (
                     <div className="space-y-1.5 no-print">
                       <button 
                         type="button" 
                         onClick={() => setShowPreview(!showPreview)} 
-                        className="w-full bg-stone-200 hover:bg-stone-300 p-2.5 rounded-lg border border-stone-350 flex justify-between items-center text-xs font-black text-stone-700"
+                        className="w-full bg-stone-200 hover:bg-stone-300 p-2.5 rounded-lg border border-stone-355 flex justify-between items-center text-xs font-black text-stone-700"
                       >
                         <span><i className="fa-solid fa-receipt mr-1.5"></i> Collapsible Receipt Preview</span>
                         <span className="text-xs font-bold">{showPreview ? '- Close Preview' : '+ Preview Bill'}</span>
@@ -1166,7 +1097,7 @@
                           
                           <table className="w-full text-left text-[10px]">
                             <thead>
-                              <tr class="border-b border-black">
+                              <tr className="border-b border-black">
                                 <th className="w-6 text-center">QT</th>
                                 <th>ITEM</th>
                                 <th className="text-right w-10">P</th>
@@ -1205,20 +1136,18 @@
                     <button type="button" onClick={handleGenerateAndPrintBill} className="w-full py-3.5 bg-stone-900 text-white rounded-xl text-xs uppercase tracking-wider font-extrabold flex justify-center items-center gap-1.5 h-12 shadow-sm">
                       <i className="fa-solid fa-print"></i> {saveStatus === 1 ? "Saving...": "Print Bill"}
                     </button>
-                    {isBillGenerated && <button type="button" onClick={() => sharePDFReceipt(baggedItems, customerName, customerCity, billDate)} className="w-full py-2 bg-emerald-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex justify-center items-center gap-1 h-9"><i className="fa-solid fa-share-nodes"></i> Share Receipt</button>}
+                    {isBillGenerated && <button type="button" onClick={() => sharePDFReceipt(baggedItems, customerName, customerCity, billDate)} className="w-full py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex justify-center items-center gap-1 h-9"><i className="fa-solid fa-share-nodes"></i> Share Receipt</button>}
                   </div>
                 )}
               </div>
             )}
 
-            {/* Tab 3: Catalog Management */}
             {currentTab === "products" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
                 <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0 shadow-xs">
                   <input 
                     type="text" 
-                    name={`random_newprod_${Math.random()}`}
-                    autocomplete="new-password"
+                    autoComplete="new-password"
                     required 
                     placeholder="Product Identification Name..." 
                     value={newProdName} 
@@ -1228,7 +1157,6 @@
                   <button type="submit" className="w-full py-2 h-10 bg-stone-900 text-white text-xs font-bold rounded-lg transition-colors">Add Product Entry</button>
                 </form>
 
-                {/* Search-Based Product Merging Sub-Console */}
                 {selectedCatalogProduct && (
                   <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-2 animate-slide-up text-xs shadow-xs">
                     <div className="flex justify-between items-center">
@@ -1239,7 +1167,7 @@
                     <div className="relative">
                       <input 
                         type="text"
-                        autocomplete="new-password"
+                        autoComplete="new-password"
                         placeholder="Search target product name..."
                         value={mergeTargetSearch}
                         onChange={(e) => { setMergeTargetSearch(e.target.value); setShowMergeTargetSuggestions(true); }}
@@ -1248,7 +1176,7 @@
                       />
                       {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
                         <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 mt-1">
-                          {cloudProducts
+                          {sortedProductsLocal
                             .filter(p => p.id !== selectedCatalogProduct.id && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
                             .slice(0, 5)
                             .map(p => (
@@ -1274,7 +1202,7 @@
                           triggerNotification("Please select/search a target product.");
                           return;
                         }
-                        const targetItem = cloudProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
+                        const targetItem = sortedProductsLocal.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
                         if (!targetItem) {
                           triggerNotification("Target product must exist in catalog directory.");
                           return;
@@ -1285,7 +1213,7 @@
                         }
                         try {
                           await window.firebaseBridge.addProductToCloud({ name: targetItem.name });
-                          await window.firebaseBridge.deleteProductFromCloud(selectedCatalogProduct.id);
+                          await window.firebaseBridge.deleteProductFromCloud(selectedCatalogProduct.name);
                           
                           setAddedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(selectedCatalogProduct.name) ? { ...item, name: targetItem.name } : item));
                           setBaggedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(selectedCatalogProduct.name) ? { ...item, name: targetItem.name } : item));
@@ -1305,13 +1233,11 @@
                   </div>
                 )}
 
-                {/* Search / Filter bar for products catalog */}
                 <div className="bg-white p-2 border rounded-xl space-y-1 shadow-xs">
                   <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
                   <input 
                     type="text" 
-                    name={`random_catfilter_${Math.random()}`}
-                    autocomplete="new-password"
+                    autoComplete="new-password"
                     placeholder="Filter products list..." 
                     value={productFilterQuery} 
                     onChange={e => setProductFilterQuery(e.target.value)} 
@@ -1319,11 +1245,9 @@
                   />
                 </div>
 
-                {/* Alphabetical Product List Rendering */}
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs">
-                  {cloudProducts
+                  {sortedProductsLocal
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
-                    .sort((a, b) => a.name.localeCompare(b.name))
                     .map(p => (
                       <div 
                         key={p.id} 
@@ -1341,7 +1265,7 @@
                           </button>
                           <button 
                             type="button" 
-                            onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.id); }} 
+                            onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.name); }} 
                             className="text-stone-300 hover:text-rose-600 transition-colors"
                           >
                             <i className="fa-solid fa-trash-can"></i>
@@ -1353,7 +1277,6 @@
               </div>
             )}
 
-            {/* Tab 4: Logs & Historic Audit Ledger */}
             {currentTab === "logs" && (
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-3 flex flex-col min-h-0">
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0">
@@ -1367,14 +1290,13 @@
                       <div key={b.id} className="border bg-white rounded-lg p-2.5 text-xs space-y-1 animate-slide-up shadow-xs">
                         <div className="flex justify-between font-bold">
                           <span className="uppercase text-stone-950 truncate max-w-[200px]">{b.customerName} ({b.customerCity})</span>
-                          <span className="font-mono text-stone-800">₹{Math.round(b.totalAmount || 0)}</span>
+                          <span className="font-mono text-stone-800">₹{Math.round(b.totalAmount || b.amount || 0)}</span>
                         </div>
                         <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
                           <span>{b.formattedDateTime || b.date}</span>
                           <div className="flex items-center gap-1 flex-wrap">
-                            <span className="text-emerald-600 font-sans mr-1">{b.syncStatusSheets && b.syncStatusFirestore ? "✓✓ Logged" : "✓ Saved"}</span>
+                            <span className="text-emerald-600 font-sans mr-1">✓ Saved</span>
                             
-                            {/* FIXED: Collapsible Receipt Preview (+ Sign Toggle) inside each Historic Log Entry row */}
                             <button 
                               type="button"
                               onClick={() => toggleLogItemPreview(b.id)}
@@ -1392,7 +1314,7 @@
                             </button>
                             <button 
                               type="button" 
-                              onClick={() => sharePDFReceipt(b.items, b.customerName, b.customerCity, b.date)} 
+                              onClick={() => sharePDFReceipt(b.items || [], b.customerName, b.customerCity, b.date)} 
                               className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border rounded text-[9px] uppercase font-bold"
                             >
                               Share
@@ -1407,7 +1329,6 @@
                           </div>
                         </div>
 
-                        {/* Collapsible log preview block rendering nested inside Historic log card */}
                         {visibleLogPreviews[b.id] && (
                           <div className="mt-2.5 p-3.5 bg-stone-50 border border-stone-200 rounded-lg text-left font-mono text-[11px] leading-tight text-stone-850 animate-slide-up shadow-inner">
                             <div className="text-center border-b border-dashed border-stone-400 pb-1.5 mb-1.5">
@@ -1428,14 +1349,14 @@
                                   <tr key={index} className="border-b border-stone-200/50">
                                     <td className="text-center font-bold text-stone-900">{Math.round(item.qty)}</td>
                                     <td className="uppercase truncate max-w-[110px] font-sans font-bold">{item.name}</td>
-                                    <td className="text-right">{Math.round(item.finalUnitPrice)}</td>
-                                    <td className="text-right font-bold text-stone-900">{Math.round(item.totalAmount)}</td>
+                                    <td className="text-right">{Math.round(item.finalUnitPrice || item.rate || item.basePrice)}</td>
+                                    <td className="text-right font-bold text-stone-900">{Math.round(item.totalAmount || item.amount)}</td>
                                   </tr>
                                 ))}
                               </tbody>
                             </table>
                             <div className="text-right font-black border-t border-dashed border-stone-400 pt-1.5 mt-1.5 text-stone-950">
-                              Grand Total: ₹{Math.round(b.totalAmount || 0)}
+                              Grand Total: ₹{Math.round(b.totalAmount || b.amount || 0)}
                             </div>
                           </div>
                         )}
@@ -1448,8 +1369,7 @@
                     <div className="pt-2 text-center">
                       <input 
                         type="password" 
-                        name={`random_pass_${Math.random()}`}
-                        autocomplete="new-password"
+                        autoComplete="new-password"
                         placeholder="Passcode..." 
                         value={passwordInput}
                         onChange={(e) => {
@@ -1466,7 +1386,6 @@
 
           </main>
 
-          {/* Clean App-Style Tab Navigation Bar: Icon and label sizing amplified */}
           <footer className="bg-stone-900 border-t py-3 px-4 no-print flex-shrink-0 z-40 shadow-lg">
             <div className="max-w-md mx-auto flex justify-around items-center">
               
@@ -1511,25 +1430,11 @@
           </footer>
 
           <div id="printable-bill-invoice"></div>
-
-          {showFastDraftConfirmModal && (
-            <div className="absolute inset-0 bg-stone-900/80 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-2xl max-w-sm w-full p-4 space-y-3 shadow-2xl border">
-                <div className="text-stone-900 font-extrabold text-xs flex items-center gap-1 font-sans"><i className="fa-solid fa-circle-question text-amber-500"></i> Fast Draft Selection</div>
-                <p className="text-xs text-stone-600 font-semibold leading-relaxed font-sans">Do you want to clear current draft values or add items to old bill?</p>
-                <div className="flex flex-col gap-1.5 pt-1 font-sans">
-                  <button type="button" onClick={() => { handleResetAll(); setShowFastDraftConfirmModal(false); setCurrentTab("bill"); }} className="w-full py-2 bg-rose-600 text-white rounded text-xs font-extrabold">New Bill (Clear Everything)</button>
-                  <button type="button" onClick={() => { setShowFastDraftConfirmModal(false); setCurrentTab("bill"); }} className="w-full py-2 bg-stone-900 text-white rounded text-xs font-extrabold">Add Items to Old Bill</button>
-                  <button type="button" onClick={() => setShowFastDraftConfirmModal(false)} className="w-full py-1.5 bg-stone-100 text-stone-800 rounded text-xs font-bold border">Cancel</button>
-                </div>
-              </div>
-            </div>
-          )}
-
         </div>
       );
     }
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
   </script>
 </body>
 </html>
