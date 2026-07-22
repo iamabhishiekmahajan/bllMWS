@@ -104,6 +104,118 @@
 
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
 
+    // IndexedDB Offline Local Storage Engine
+    const idbStorage = {
+      dbPromise: null,
+      init() {
+        if (this.dbPromise) return this.dbPromise;
+        this.dbPromise = new Promise((resolve, reject) => {
+          const request = indexedDB.open("RoughBillDB", 2);
+          request.onupgradeneeded = (e) => {
+            const db = e.target.result;
+            if (!db.objectStoreNames.contains("bills")) {
+              db.createObjectStore("bills", { keyPath: "id" });
+            }
+            if (!db.objectStoreNames.contains("pendingSync")) {
+              db.createObjectStore("pendingSync", { keyPath: "id" });
+            }
+            if (!db.objectStoreNames.contains("products")) {
+              db.createObjectStore("products", { keyPath: "name" });
+            }
+            if (!db.objectStoreNames.contains("customers")) {
+              db.createObjectStore("customers", { keyPath: "name" });
+            }
+          };
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        return this.dbPromise;
+      },
+      async saveBill(bill, isPending = false) {
+        const db = await this.init();
+        return new Promise((resolve) => {
+          const tx = db.transaction(["bills", "pendingSync"], "readwrite");
+          tx.objectStore("bills").put(bill);
+          if (isPending) {
+            tx.objectStore("pendingSync").put(bill);
+          } else {
+            tx.objectStore("pendingSync").delete(bill.id);
+          }
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        });
+      },
+      async removePending(id) {
+        const db = await this.init();
+        return new Promise((resolve) => {
+          const tx = db.transaction("pendingSync", "readwrite");
+          tx.objectStore("pendingSync").delete(id);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        });
+      },
+      async removeBill(id) {
+        const db = await this.init();
+        return new Promise((resolve) => {
+          const tx = db.transaction(["bills", "pendingSync"], "readwrite");
+          tx.objectStore("bills").delete(id);
+          tx.objectStore("pendingSync").delete(id);
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(false);
+        });
+      },
+      async getPending() {
+        const db = await this.init();
+        return new Promise((resolve) => {
+          const tx = db.transaction("pendingSync", "readonly");
+          const req = tx.objectStore("pendingSync").getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => resolve([]);
+        });
+      },
+      async getAllBills() {
+        const db = await this.init();
+        return new Promise((resolve) => {
+          const tx = db.transaction("bills", "readonly");
+          const req = tx.objectStore("bills").getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => resolve([]);
+        });
+      },
+      async cacheProducts(products) {
+        if (!Array.isArray(products) || products.length === 0) return;
+        const db = await this.init();
+        const tx = db.transaction("products", "readwrite");
+        const store = tx.objectStore("products");
+        products.forEach(p => { if (p && p.name) store.put(p); });
+      },
+      async getProducts() {
+        const db = await this.init();
+        return new Promise((resolve) => {
+          const tx = db.transaction("products", "readonly");
+          const req = tx.objectStore("products").getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => resolve([]);
+        });
+      },
+      async cacheCustomers(customers) {
+        if (!Array.isArray(customers) || customers.length === 0) return;
+        const db = await this.init();
+        const tx = db.transaction("customers", "readwrite");
+        const store = tx.objectStore("customers");
+        customers.forEach(c => { if (c && c.name) store.put(c); });
+      },
+      async getCustomers() {
+        const db = await this.init();
+        return new Promise((resolve) => {
+          const tx = db.transaction("customers", "readonly");
+          const req = tx.objectStore("customers").getAll();
+          req.onsuccess = () => resolve(req.result || []);
+          req.onerror = () => resolve([]);
+        });
+      }
+    };
+
     window.firebaseBridge = {
       connected: true,
       products: [],
@@ -130,6 +242,13 @@
           }
         };
 
+        // First save to local IndexedDB
+        await idbStorage.saveBill(bill, !navigator.onLine);
+
+        if (!navigator.onLine) {
+          throw new Error("Offline - Saved locally in IndexedDB");
+        }
+
         try {
           await fetch(SCRIPT_URL, {
             method: "POST",
@@ -137,10 +256,32 @@
             headers: { "Content-Type": "text/plain" },
             body: JSON.stringify(payload)
           });
+          // On cloud post success, remove from pending queue
+          await idbStorage.saveBill(bill, false);
         } catch (err) {
-          console.warn("Background cloud sync error:", err);
+          // If network fetch fails, keep in pending queue for background sync
+          await idbStorage.saveBill(bill, true);
+          throw err;
         }
         return { id: String(numericId) };
+      },
+
+      deleteTxnFromCloud: async (numericId) => {
+        await idbStorage.removeBill(numericId);
+        const payload = {
+          action: 'deleteTxn',
+          id: numericId
+        };
+        try {
+          await fetch(SCRIPT_URL, {
+            method: "POST",
+            mode: "no-cors",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify(payload)
+          });
+        } catch (e) {
+          console.warn("Background bill delete error:", e);
+        }
       },
 
       addProductToCloud: async (prod) => {
@@ -206,6 +347,11 @@
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
       const [groupLessInputs, setGroupLessInputs] = useState({});
+      const [billToDelete, setBillToDelete] = useState(null);
+
+      // Offline Resilience & Pending Sync States
+      const [isOnline, setIsOnline] = useState(navigator.onLine);
+      const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
       // Printable Settings State
       const [printSettings, setPrintSettings] = useState({
@@ -232,6 +378,99 @@
         setTimeout(() => setNotification(""), 3500);
       };
 
+      // Load cached IndexedDB data first on mount for immediate offline availability
+      useEffect(() => {
+        const loadIDBCache = async () => {
+          const cachedBills = await idbStorage.getAllBills();
+          const cachedProds = await idbStorage.getProducts();
+          const cachedCusts = await idbStorage.getCustomers();
+          const pending = await idbStorage.getPending();
+
+          if (cachedBills.length > 0) {
+            const sorted = [...cachedBills].sort((a, b) => (b.id ? Number(b.id) : 0) - (a.id ? Number(a.id) : 0));
+            setCloudBills(sorted);
+          }
+          if (cachedProds.length > 0) setCloudProducts(cachedProds);
+          if (cachedCusts.length > 0) setDbCustomers(cachedCusts);
+          setPendingSyncCount(pending.length);
+        };
+        loadIDBCache();
+      }, []);
+
+      // Connectivity Listeners & Background Sync Worker
+      useEffect(() => {
+        const handleOnline = () => {
+          setIsOnline(true);
+          triggerNotification("📶 Online! Auto-syncing pending offline bills...");
+          syncPendingOfflineBills();
+        };
+        const handleOffline = () => {
+          setIsOnline(false);
+          triggerNotification("⚡ Network Disconnected - Switching to IndexedDB Local Mode");
+        };
+
+        window.addEventListener("online", handleOnline);
+        window.addEventListener("offline", handleOffline);
+
+        return () => {
+          window.removeEventListener("online", handleOnline);
+          window.removeEventListener("offline", handleOffline);
+        };
+      }, []);
+
+      // Background Sync Process for Pending Bills
+      const syncPendingOfflineBills = async () => {
+        if (!navigator.onLine) return;
+        const pending = await idbStorage.getPending();
+        if (pending.length === 0) {
+          setPendingSyncCount(0);
+          return;
+        }
+
+        let syncedCount = 0;
+        for (const bill of pending) {
+          const payload = {
+            action: 'addTxn',
+            txn: {
+              id: bill.id,
+              name: bill.customerName,
+              amount: Math.round(bill.totalAmount),
+              date: bill.date,
+              type: "bill",
+              remarks: ""
+            },
+            items: bill.items,
+            customer: {
+              name: bill.customerName,
+              city: bill.customerCity || "Local",
+              discount: bill.discountRate,
+              joined: bill.date.split(" ")[0]
+            }
+          };
+
+          try {
+            await fetch(SCRIPT_URL, {
+              method: "POST",
+              mode: "no-cors",
+              headers: { "Content-Type": "text/plain" },
+              body: JSON.stringify(payload)
+            });
+            await idbStorage.removePending(bill.id);
+            syncedCount++;
+          } catch (e) {
+            console.warn("Background bill sync attempt deferred:", e);
+          }
+        }
+
+        const remainingPending = await idbStorage.getPending();
+        setPendingSyncCount(remainingPending.length);
+
+        if (syncedCount > 0) {
+          triggerNotification(`✓ Successfully auto-synced ${syncedCount} offline bill(s) to Google Sheets!`);
+          syncDataFromGoogleSheets();
+        }
+      };
+
       const syncDataFromGoogleSheets = () => {
         const callbackName = "handleSheetsSync_" + Math.floor(Math.random() * 100000);
         window[callbackName] = (data) => {
@@ -251,13 +490,14 @@
               }
               setDbCustomers(parsedCustomers);
               window.firebaseBridge.customers = parsedCustomers;
+              idbStorage.cacheCustomers(parsedCustomers);
             }
             if (data.products) {
               setCloudProducts(data.products);
               window.firebaseBridge.products = data.products;
+              idbStorage.cacheProducts(data.products);
             }
             if (data.txns) {
-              // Sort recent bills first
               const sortedTxns = [...data.txns].sort((a, b) => {
                 const timeA = a.id ? Number(a.id) : new Date(a.date || 0).getTime();
                 const timeB = b.id ? Number(b.id) : new Date(b.date || 0).getTime();
@@ -265,6 +505,7 @@
               });
               setCloudBills(sortedTxns);
               window.firebaseBridge.bills = sortedTxns;
+              sortedTxns.forEach(b => idbStorage.saveBill(b, false));
             }
           }
           document.getElementById(callbackName)?.remove();
@@ -280,7 +521,10 @@
       useEffect(() => {
         syncDataFromGoogleSheets();
         const interval = setInterval(() => {
-          syncDataFromGoogleSheets();
+          if (navigator.onLine) {
+            syncDataFromGoogleSheets();
+            syncPendingOfflineBills();
+          }
           if (bleDevice && !bleCharacteristic) {
             reconnectBLEPrinterQuietly();
           }
@@ -345,11 +589,33 @@
       };
 
       const handleLoadHistoricalBill = (historicalBillObj) => {
-        setCustomerName(historicalBillObj.customerName || "");
-        setCustomerCity(historicalBillObj.customerCity || "");
+        setCustomerName(historicalBillObj.customerName || historicalBillObj.name || "");
+        setCustomerCity(historicalBillObj.customerCity || historicalBillObj.city || "");
         setDiscountX(String(historicalBillObj.discountRate || historicalBillObj.discount || 0));
-        setBillDate(historicalBillObj.date || new Date().toISOString().split('T')[0]);
-        setBaggedItems(historicalBillObj.items || []);
+        setBillDate(historicalBillObj.date ? historicalBillObj.date.split(' ')[0] : new Date().toISOString().split('T')[0]);
+        
+        const rawItems = historicalBillObj.items || [];
+        const normalized = rawItems.map((i, idx) => {
+          const qtyVal = parseFloat(i.qty) || 1;
+          const priceVal = parseFloat(i.basePrice || i.rate || i.price || i.finalUnitPrice || 0);
+          const lessVal = (i.less !== undefined && i.less !== null && i.less !== "—") ? String(i.less) : "—";
+          const deduct = (lessVal !== "—" && !isNaN(parseFloat(lessVal))) ? parseFloat(lessVal) : 0;
+          const finalPrice = i.finalUnitPrice !== undefined ? parseFloat(i.finalUnitPrice) : Math.max(0, priceVal - deduct);
+          const totalAmt = i.totalAmount !== undefined ? parseFloat(i.totalAmount) : (parseFloat(i.amount) || (qtyVal * finalPrice));
+
+          return {
+            id: i.id || (Date.now() + Math.random() + idx),
+            qty: qtyVal,
+            name: i.name || "Item",
+            code: (i.code && i.code !== "—") ? i.code : "—",
+            basePrice: priceVal,
+            less: lessVal,
+            finalUnitPrice: finalPrice,
+            totalAmount: totalAmt
+          };
+        });
+
+        setBaggedItems(normalized);
         setEditingBillId(String(historicalBillObj.id) || null);
         setCurrentTab("bill");
         triggerNotification("Historical bill loaded into bag!");
@@ -440,7 +706,9 @@
         const isDuplicateCatalog = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(displayCasing));
         if (!isDuplicateCatalog) {
           window.firebaseBridge.addProductToCloud({ name: displayCasing });
-          setCloudProducts(prev => [...prev, { id: Date.now(), name: displayCasing }]);
+          const updatedProds = [...cloudProducts, { id: Date.now(), name: displayCasing }];
+          setCloudProducts(updatedProds);
+          idbStorage.cacheProducts(updatedProds);
         }
 
         const newItem = {
@@ -524,29 +792,13 @@
         return Object.values(groups);
       }, [baggedItems]);
 
-      // Top 10 Most Frequently Billed Unique Products
-      const topBilledProducts = useMemo(() => {
-        const counts = {};
-        cloudBills.forEach(b => {
-          if (Array.isArray(b.items)) {
-            b.items.forEach(i => {
-              if (i && i.name) {
-                const key = getNormalizedKey(i.name);
-                counts[key] = (counts[key] || 0) + (i.qty || 1);
-              }
-            });
-          }
-        });
-
+      // ALPHABETICALLY SORTED PRODUCTS FOR DIRECTORY & SUGGESTIONS
+      const alphabetizedProducts = useMemo(() => {
+        if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
         return [...cloudProducts]
           .filter(p => p && p.name)
-          .sort((a, b) => {
-            const countA = counts[getNormalizedKey(a.name)] || 0;
-            const countB = counts[getNormalizedKey(b.name)] || 0;
-            if (countB !== countA) return countB - countA;
-            return a.name.localeCompare(b.name);
-          });
-      }, [cloudProducts, cloudBills]);
+          .sort((a, b) => (a.name || "").localeCompare((b.name || ""), undefined, { sensitivity: 'base', numeric: true }));
+      }, [cloudProducts]);
 
       // Renders receipts for printer/spool utilizing Print Settings
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
@@ -631,7 +883,7 @@
         return receiptHTML;
       };
 
-      // PRINT FIRST, STORE DATA IN CLOUD LATER
+      // PRINT FIRST, STORE DATA IN INDEXEDDB & CLOUD LATER
       const handleGenerateAndPrintBill = async () => {
         if (baggedItems.length === 0) return;
         
@@ -656,8 +908,6 @@
           }
         }
 
-        triggerNotification("✓ Bill Printed! Syncing to Google Sheets in background...");
-
         const computedTotalSum = baggedItems.reduce((acc, i) => acc + i.totalAmount, 0);
         const billDataObject = {
           id: uniqueNumericId, customerName: finalClientName, customerCity: customerCity || "Local",
@@ -665,9 +915,16 @@
           timestamp: uniqueNumericId, syncStatusFirestore: true, syncStatusSheets: true, formattedDateTime: printDateFormatted
         };
 
+        // Update local state list immediately
+        setCloudBills(prev => [billDataObject, ...prev.filter(b => String(b.id) !== String(uniqueNumericId))]);
+
+        // Save to IndexedDB local database instantly
         window.firebaseBridge.saveBillToCloudWithNumericId(uniqueNumericId, billDataObject, synchronousIsEdit)
-          .then(() => triggerNotification("✓ Bill saved to Sheets!"))
-          .catch(() => triggerNotification("Failed to save to Sheets."));
+          .then(() => triggerNotification("✓ Bill saved locally & synced to Sheets!"))
+          .catch(() => {
+            setPendingSyncCount(prev => prev + 1);
+            triggerNotification("⚡ Saved to IndexedDB! Will auto-sync when online.");
+          });
 
         setTimeout(() => {
           handleResetAll();
@@ -805,7 +1062,9 @@
       const handleCatalogDelete = async (name) => {
         try {
           await window.firebaseBridge.deleteProductFromCloud(name);
-          setCloudProducts(prev => prev.filter(p => getNormalizedKey(p.name) !== getNormalizedKey(name)));
+          const updated = cloudProducts.filter(p => getNormalizedKey(p.name) !== getNormalizedKey(name));
+          setCloudProducts(updated);
+          idbStorage.cacheProducts(updated);
           triggerNotification("Product deleted from cloud catalog.");
         } catch (err) {
           console.error(err);
@@ -855,7 +1114,9 @@
         const formattedName = toTitleCase(trimmed);
         try {
           await window.firebaseBridge.addProductToCloud({ name: formattedName });
-          setCloudProducts(prev => [...prev, { id: Date.now(), name: formattedName }]);
+          const updated = [...cloudProducts, { id: Date.now(), name: formattedName }];
+          setCloudProducts(updated);
+          idbStorage.cacheProducts(updated);
           setNewProdNameState("");
           triggerNotification("Product synced to database!");
         } catch (err) {
@@ -912,7 +1173,7 @@
       };
 
       const autocompleteQueryLocal = getParserAutocompleteQueryLocal();
-      const suggestionsLocal = autocompleteQueryLocal ? topBilledProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
+      const suggestionsLocal = autocompleteQueryLocal ? alphabetizedProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
 
       const filteredSheetsCustomers = customerName.trim() === "" 
         ? [] 
@@ -1007,8 +1268,10 @@
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           printBody.innerHTML = reportHTML;
+          setTimeout(() => {
+            window.print();
+          }, 100);
         }
-        window.print();
       };
 
       return (
@@ -1022,9 +1285,61 @@
             </div>
           )}
 
+          {/* Offline Pending Sync Warning Bar */}
+          {(!isOnline || pendingSyncCount > 0) && (
+            <div className="bg-amber-500 text-stone-950 py-1 px-4 text-center text-[10px] font-black uppercase tracking-wider no-print flex-shrink-0 z-50 flex items-center justify-center gap-2 border-b border-amber-600 shadow-sm">
+              <i className="fa-solid fa-wifi text-xs"></i>
+              <span>{!isOnline ? "Offline Mode (IndexedDB Active)" : `${pendingSyncCount} offline bill(s) pending sync`}</span>
+              {isOnline && pendingSyncCount > 0 && (
+                <button type="button" onClick={syncPendingOfflineBills} className="underline bg-stone-900 text-white px-2 py-0.5 rounded text-[9px]">Sync Now</button>
+              )}
+            </div>
+          )}
+
           {notification && (
             <div className="bg-amber-500 text-stone-950 py-2 px-4 text-center text-xs font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50 shadow-md">
               {notification}
+            </div>
+          )}
+
+          {/* Delete Bill Confirmation Modal */}
+          {billToDelete && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-slide-up no-print">
+              <div className="bg-white rounded-xl p-5 max-w-xs w-full shadow-2xl space-y-4 text-center border border-stone-300">
+                <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto text-xl">
+                  <i className="fa-solid fa-trash-can"></i>
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-stone-900 uppercase">Delete Bill Confirmation</h3>
+                  <p className="text-xs text-stone-500 mt-1">Are you sure you want to delete bill <span className="font-mono font-bold text-stone-800">#{billToDelete.id}</span> for <span className="font-bold text-stone-900">{billToDelete.customerName}</span>?</p>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    type="button" 
+                    onClick={() => setBillToDelete(null)} 
+                    className="flex-1 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-lg text-xs uppercase"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={async () => {
+                      const idToDelete = billToDelete.id;
+                      setBillToDelete(null);
+                      setCloudBills(prev => prev.filter(b => String(b.id) !== String(idToDelete)));
+                      try {
+                        await window.firebaseBridge.deleteTxnFromCloud(idToDelete);
+                        triggerNotification("✓ Bill deleted successfully!");
+                      } catch(e) {
+                        triggerNotification("Error deleting bill.");
+                      }
+                    }} 
+                    className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-lg text-xs uppercase shadow-sm"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1089,12 +1404,12 @@
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-2 overflow-hidden min-h-0">
                 
-                {/* Product Directory Shortcuts */}
+                {/* Product Directory Shortcuts (Alphabetical Order A-Z) */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Top Billed Directory Shortcuts</span>
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Alphabetical Directory Shortcuts</span>
                   <div className="flex gap-1 overflow-x-auto pb-1 custom-scroll">
-                    {topBilledProducts.slice(0, 10).map(p => (
-                      <button key={p.id} type="button" onClick={() => {
+                    {alphabetizedProducts.map(p => (
+                      <button key={p.id || p.name} type="button" onClick={() => {
                         setParserInput(prev => {
                           const m = prev.match(/^\d+(\.\d+)?\s+/);
                           return `${m ? m[0] : "1 "}${p.name} `;
@@ -1131,13 +1446,13 @@
                   {suggestionsLocal.length > 0 && (
                     <div className="absolute left-1 right-20 top-full mt-1 max-h-36 overflow-y-auto bg-white/95 backdrop-blur-md border border-stone-300 shadow-xl rounded-lg z-50 divide-y divide-stone-100">
                       {suggestionsLocal.map(p => (
-                        <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-stone-100 text-stone-900 cursor-pointer">{p.name}</div>
+                        <div key={p.id || p.name} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-stone-100 text-stone-900 cursor-pointer">{p.name}</div>
                       ))}
                     </div>
                   )}
                 </div>
 
-                {/* BAGGED ITEMS LIST: GROUPED BY ITEM NAME FIRST, WITH COMBINED LESS */}
+                {/* BAGGED ITEMS LIST: GROUPED IN A ULTRA-COMPACT SINGLE LINE FORMAT */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2.5 pr-0.5 min-h-0 flex-1">
                   
                   {baggedItems.length === 0 ? (
@@ -1148,61 +1463,49 @@
                     <>
                       {/* GROUPED BAGGED ITEMS */}
                       {groupedBaggedItems.map(group => (
-                        <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-2 space-y-2 shadow-xs animate-slide-up">
+                        <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-1.5 space-y-1.5 shadow-xs animate-slide-up">
                           
-                          {/* Group Header: Group Item Name FIRST, Total Qty, and Combined Less Option */}
-                          <div className="bg-stone-900 text-white p-2 rounded-lg flex flex-col gap-1.5">
-                            <div className="flex items-center justify-between">
-                              <span className="font-black text-sm uppercase tracking-wider">{group.displayName}</span>
-                              <span className="text-xs bg-amber-400 text-stone-950 font-mono font-black px-2 py-0.5 rounded-md">
-                                Total Qty: {group.totalQty}
+                          {/* Single-Line Group Header: [ITEM NAME] [Total Qty] [Less: Input] [Apply] */}
+                          <div className="bg-stone-900 text-white px-2 py-1.5 rounded-lg flex items-center justify-between gap-1 text-xs shadow-xs">
+                            <div className="flex items-center gap-1.5 min-w-0 flex-shrink truncate">
+                              <span className="font-black text-xs uppercase tracking-wider text-amber-300 truncate">{group.displayName}</span>
+                              <span className="text-[10px] bg-amber-400 text-stone-950 font-mono font-black px-1.5 py-0.5 rounded-md flex-shrink-0">
+                                Qty: {group.totalQty}
                               </span>
                             </div>
 
-                            {/* Combined Less Option for all items of this group */}
-                            <div className="flex items-center justify-between bg-stone-800 p-1.5 rounded border border-stone-700 text-xs">
-                              <span className="text-[10px] font-extrabold uppercase text-amber-300">Group Less Deduction:</span>
-                              <div className="flex items-center gap-1">
-                                <span className="text-amber-400 font-bold">₹</span>
-                                <input 
-                                  type="number" 
-                                  placeholder="Less" 
-                                  value={groupLessInputs[group.key] || ""} 
-                                  onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
-                                  className="w-16 px-1.5 py-0.5 text-xs text-stone-950 bg-white border rounded font-mono font-bold text-center focus:outline-none"
-                                />
-                                <button 
-                                  type="button" 
-                                  onClick={() => applyGroupLessDiscount(group.key, groupLessInputs[group.key] || "0")} 
-                                  className="px-2.5 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[10px] font-black uppercase rounded shadow-xs"
-                                >
-                                  Apply
-                                </button>
-                              </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              <span className="text-[9px] font-black text-amber-200 uppercase">Less:</span>
+                              <input 
+                                type="number" 
+                                placeholder="₹" 
+                                value={groupLessInputs[group.key] || ""} 
+                                onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
+                                className="w-12 px-1 py-0.5 text-xs text-stone-950 bg-white rounded font-mono font-bold text-center focus:outline-none h-6"
+                              />
+                              <button 
+                                type="button" 
+                                onClick={() => applyGroupLessDiscount(group.key, groupLessInputs[group.key] || "0")} 
+                                className="px-2 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[10px] font-black uppercase rounded h-6"
+                              >
+                                Apply
+                              </button>
                             </div>
                           </div>
 
-                          {/* Items Under This Group Header - Clear and High Visibility */}
-                          <div className="space-y-1.5 divide-y divide-stone-100">
+                          {/* Child Item Rows Under Group - Name NOT repeated! High data density */}
+                          <div className="space-y-1 divide-y divide-stone-100">
                             {group.items.map(item => (
-                              <div key={item.id} className="pt-1.5 flex flex-col gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200">
+                              <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200">
                                 
-                                <div className="flex items-center justify-between font-sans">
-                                  <span className="font-bold text-stone-800 uppercase">{item.name}</span>
-                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-400 hover:text-rose-600 px-1 text-sm">
-                                    <i className="fa-solid fa-xmark"></i>
-                                  </button>
-                                </div>
-
-                                {/* Detailed Clear Row showing Qty, Code, Price, Less, Final Amount */}
-                                <div className="flex items-center gap-1 text-stone-900 font-mono">
+                                <div className="flex items-center gap-1 flex-wrap sm:flex-nowrap font-mono flex-grow min-w-0">
                                   <div className="flex items-center gap-0.5 bg-white border px-1 py-0.5 rounded">
                                     <span className="text-[8px] font-black text-stone-400 uppercase">Q:</span>
                                     <input 
                                       type="number" 
                                       value={item.qty} 
                                       onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
-                                      className="w-8 text-center font-black bg-transparent focus:outline-none"
+                                      className="w-7 text-center font-black bg-transparent focus:outline-none"
                                     />
                                   </div>
 
@@ -1213,7 +1516,7 @@
                                       placeholder="Code"
                                       value={item.code === "—" ? "" : item.code} 
                                       onChange={e => handleEditBaggedItem(item.id, 'code', e.target.value)} 
-                                      className="w-12 text-center font-bold text-indigo-700 bg-transparent focus:outline-none uppercase"
+                                      className="w-11 text-center font-bold text-indigo-700 bg-transparent focus:outline-none uppercase"
                                     />
                                   </div>
 
@@ -1238,10 +1541,14 @@
                                     />
                                   </div>
 
-                                  <div className="flex-grow text-right font-black text-stone-900 text-xs pr-0.5">
+                                  <div className="flex-grow text-right font-black text-stone-900 text-xs pr-1">
                                     ₹{Math.round(item.totalAmount)}
                                   </div>
                                 </div>
+
+                                <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-400 hover:text-rose-600 px-1 text-sm flex-shrink-0">
+                                  <i className="fa-solid fa-xmark"></i>
+                                </button>
 
                               </div>
                             ))}
@@ -1357,12 +1664,12 @@
                       />
                       {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
                         <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 mt-1">
-                          {topBilledProducts
+                          {alphabetizedProducts
                             .filter(p => p.id !== selectedCatalogProduct.id && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
                             .slice(0, 5)
                             .map(p => (
                               <div 
-                                key={p.id}
+                                key={p.id || p.name}
                                 onMouseDown={() => {
                                   setMergeTargetSearch(p.name);
                                   setShowMergeTargetSuggestions(false);
@@ -1383,14 +1690,16 @@
                           triggerNotification("Please select/search a target product.");
                           return;
                         }
-                        const targetItem = topBilledProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
+                        const targetItem = alphabetizedProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
                         if (!targetItem) {
                           triggerNotification("Target product must exist in catalog.");
                           return;
                         }
                         try {
                           await window.firebaseBridge.deleteProductFromCloud(selectedCatalogProduct.name);
-                          setCloudProducts(prev => prev.filter(p => getNormalizedKey(p.name) !== getNormalizedKey(selectedCatalogProduct.name)));
+                          const updatedProds = cloudProducts.filter(p => getNormalizedKey(p.name) !== getNormalizedKey(selectedCatalogProduct.name));
+                          setCloudProducts(updatedProds);
+                          idbStorage.cacheProducts(updatedProds);
                           
                           setBaggedItems(prev => prev.map(item => getNormalizedKey(item.name) === getNormalizedKey(selectedCatalogProduct.name) ? { ...item, name: targetItem.name } : item));
                           
@@ -1410,7 +1719,7 @@
 
                 {/* Filter Product Catalog */}
                 <div className="bg-white p-2 border rounded-xl space-y-1 shadow-xs">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory (Alphabetical)</span>
                   <input 
                     type="text" 
                     placeholder="Filter products list..." 
@@ -1420,13 +1729,13 @@
                   />
                 </div>
 
-                {/* Catalog List */}
+                {/* Catalog List (Sorted Alphabetically A-Z) */}
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs">
-                  {topBilledProducts
+                  {alphabetizedProducts
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
                     .map(p => (
                       <div 
-                        key={p.id} 
+                        key={p.id || p.name} 
                         className={`flex justify-between items-center py-1.5 px-2 text-xs font-bold rounded cursor-pointer ${selectedCatalogProduct?.id === p.id ? 'bg-amber-100 text-stone-900' : 'hover:bg-stone-50'}`}
                         onClick={() => setSelectedCatalogProduct(p)}
                       >
@@ -1475,7 +1784,7 @@
                   </div>
                 ) : (
                   <>
-                    {/* DATE RANGE REPORT GENERATOR (ONLY APPEARS AFTER PASSCODE VERIFICATION) */}
+                    {/* DATE RANGE REPORT GENERATOR & ON-SCREEN SUMMARY */}
                     <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
                       <div className="flex justify-between items-center border-b pb-1">
                         <span className="text-[10px] font-black uppercase text-stone-500">Date Range Ledger Report</span>
@@ -1518,11 +1827,44 @@
                           <i className="fa-solid fa-print"></i> Print Report
                         </button>
                       </div>
+
+                      {/* ON-SCREEN REPORT DISPLAY BELOW */}
+                      <div className="mt-2 pt-2 border-t border-dashed border-stone-300">
+                        <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider mb-1">Report Breakdown ({reportPreset.toUpperCase()})</span>
+                        {filteredReportBills.length === 0 ? (
+                          <div className="text-center text-[10px] text-stone-400 py-2 italic">No registered customer bills in this period.</div>
+                        ) : (
+                          <div className="max-h-40 overflow-y-auto custom-scroll border rounded bg-stone-50 p-1.5 text-xs font-mono">
+                            <table className="w-full text-left">
+                              <thead>
+                                <tr className="border-b text-[9px] text-stone-500 uppercase font-sans font-bold">
+                                  <th className="pb-1">Date</th>
+                                  <th className="pb-1">Customer</th>
+                                  <th className="pb-1 text-right">Amount</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-stone-200">
+                                {filteredReportBills.map((b, i) => (
+                                  <tr key={i} className="text-[10px]">
+                                    <td className="py-1 text-stone-500">{b.date || "—"}</td>
+                                    <td className="py-1 font-bold uppercase text-stone-900 truncate max-w-[120px]">{b.customerName}</td>
+                                    <td className="py-1 text-right font-black">₹{Math.round(b.totalAmount || b.amount || 0)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            <div className="mt-2 pt-1 border-t-2 border-stone-800 flex justify-between font-black text-xs text-stone-950">
+                              <span>Total Ledger Revenue:</span>
+                              <span>₹{Math.round(filteredReportBills.reduce((acc, b) => acc + (b.totalAmount || b.amount || 0), 0))}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </>
                 )}
 
-                {/* RECENT HISTORIC BILL LOGS (Sorted Recent First) */}
+                {/* RECENT HISTORIC BILL LOGS (Sorted Recent First) WITH DELETE BILL OPTION */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0 flex-1">
                   <div className="flex justify-between items-center border-b pb-1">
                     <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">Recent Transactions (Recent First)</span>
@@ -1533,7 +1875,7 @@
                     {getSecureLogBills().map(b => (
                       <div key={b.id} className="border bg-white rounded-lg p-2 text-xs space-y-1 animate-slide-up shadow-xs">
                         <div className="flex justify-between font-bold">
-                          <span className="uppercase text-stone-950 truncate max-w-[200px]">{b.customerName} ({b.customerCity})</span>
+                          <span className="uppercase text-stone-950 truncate max-w-[180px]">{b.customerName} ({b.customerCity})</span>
                           <span className="font-mono text-stone-800 font-black">₹{Math.round(b.totalAmount || b.amount || 0)}</span>
                         </div>
                         <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
@@ -1542,7 +1884,7 @@
                             <button 
                               type="button"
                               onClick={() => toggleLogItemPreview(b.id)}
-                              className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded text-[9px] font-black text-amber-900"
+                              className="px-1.5 py-0.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded text-[9px] font-black text-amber-900"
                             >
                               {visibleLogPreviews[b.id] ? '- Close' : '+ Preview'}
                             </button>
@@ -1559,7 +1901,7 @@
                               onClick={() => shareBillImage(b.items || [], b.customerName, b.customerCity, b.date)} 
                               className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 border rounded text-[9px] uppercase font-bold"
                             >
-                              Share Image
+                              Share
                             </button>
                             <button 
                               type="button" 
@@ -1567,6 +1909,13 @@
                               className="px-1.5 py-0.5 bg-stone-900 text-white rounded text-[9px] uppercase font-bold"
                             >
                               Load
+                            </button>
+                            <button 
+                              type="button" 
+                              onClick={() => setBillToDelete(b)} 
+                              className="px-1.5 py-0.5 bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300 rounded text-[9px] uppercase font-bold"
+                            >
+                              <i className="fa-solid fa-trash-can text-[9px]"></i>
                             </button>
                           </div>
                         </div>
