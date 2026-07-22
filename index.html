@@ -89,71 +89,10 @@
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
-    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
-
-    window.firebaseBridge = {
-      connected: true,
-      products: [],
-      bills: [],
-      customers: [],
-      
-      saveBillToCloudWithNumericId: async (numericId, bill, isEdit) => {
-        const payload = {
-          action: isEdit ? 'updateTxn' : 'addTxn',
-          txn: {
-            id: numericId,
-            name: bill.customerName,
-            amount: Math.round(bill.totalAmount),
-            date: bill.date,
-            type: "bill",
-            remarks: ""
-          },
-          items: bill.items,
-          customer: {
-            name: bill.customerName,
-            city: bill.customerCity || "Local",
-            discount: bill.discountRate,
-            joined: bill.date.split(" ")[0]
-          }
-        };
-
-        await fetch(SCRIPT_URL, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify(payload)
-        });
-        return { id: String(numericId) };
-      },
-
-      addProductToCloud: async (prod) => {
-        const payload = {
-          action: 'addProduct',
-          name: prod.name
-        };
-        await fetch(SCRIPT_URL, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify(payload)
-        });
-      },
-
-      deleteProductFromCloud: async (name) => {
-        const payload = {
-          action: 'deleteProduct',
-          name: name
-        };
-        await fetch(SCRIPT_URL, {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify(payload)
-        });
-      }
-    };
+    const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
 
     function App() {
+      const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem("rough_bill_script_url") || DEFAULT_SCRIPT_URL);
       const [currentTab, setCurrentTab] = useState("bill");
       const [customerName, setCustomerName] = useState("");
       const [customerCity, setCustomerCity] = useState("");
@@ -183,7 +122,6 @@
       const [saveStatus, setSaveStatus] = useState(0);
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
-      const [showFastDraftConfirmModal, setShowFastDraftConfirmModal] = useState(false);
       const [isVerified, setIsVerified] = useState(false);
       const [passwordInput, setPasswordInput] = useState("");
       const [visibleLogPreviews, setVisibleLogPreviews] = useState({});
@@ -194,10 +132,95 @@
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
       const [globalBagLess, setGlobalBagLess] = useState("");
+      const [newSheetUrlInput, setNewSheetUrlInput] = useState("");
+
+      // Print Settings State
+      const [printSettings, setPrintSettings] = useState(() => {
+        const saved = localStorage.getItem("rough_bill_print_settings");
+        return saved ? JSON.parse(saved) : {
+          showCompanyHeader: true,
+          showDate: true,
+          showCustomerMeta: true,
+          showFooterThankYou: true,
+          fontSize: "38px",
+          fontFamily: "Courier Prime",
+          boldHeaders: true
+        };
+      });
 
       const custRef = useRef(null);
       const prodRef = useRef(null);
       const parserRef = useRef(null);
+
+      useEffect(() => {
+        localStorage.setItem("rough_bill_print_settings", JSON.stringify(printSettings));
+      }, [printSettings]);
+
+      useEffect(() => {
+        localStorage.setItem("rough_bill_script_url", scriptUrl);
+      }, [scriptUrl]);
+
+      window.firebaseBridge = {
+        connected: true,
+        products: cloudProducts,
+        bills: cloudBills,
+        customers: dbCustomers,
+        
+        saveBillToCloudWithNumericId: async (numericId, bill, isEdit) => {
+          const payload = {
+            action: isEdit ? 'updateTxn' : 'addTxn',
+            txn: {
+              id: numericId,
+              name: bill.customerName,
+              amount: Math.round(bill.totalAmount),
+              date: bill.date,
+              type: "bill",
+              remarks: ""
+            },
+            items: bill.items,
+            customer: {
+              name: bill.customerName,
+              city: bill.customerCity || "Local",
+              discount: bill.discountRate,
+              joined: bill.date.split(" ")[0]
+            }
+          };
+
+          await fetch(scriptUrl, {
+            method: "POST",
+            mode: "no-cors",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify(payload)
+          });
+          return { id: String(numericId) };
+        },
+
+        addProductToCloud: async (prod) => {
+          const payload = {
+            action: 'addProduct',
+            name: prod.name
+          };
+          await fetch(scriptUrl, {
+            method: "POST",
+            mode: "no-cors",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify(payload)
+          });
+        },
+
+        deleteProductFromCloud: async (name) => {
+          const payload = {
+            action: 'deleteProduct',
+            name: name
+          };
+          await fetch(scriptUrl, {
+            method: "POST",
+            mode: "no-cors",
+            headers: { "Content-Type": "text/plain" },
+            body: JSON.stringify(payload)
+          });
+        }
+      };
 
       const syncDataFromGoogleSheets = () => {
         const callbackName = "handleSheetsSync_" + Math.floor(Math.random() * 100000);
@@ -217,15 +240,24 @@
                 }));
               }
               setDbCustomers(parsedCustomers);
-              window.firebaseBridge.customers = parsedCustomers;
             }
             if (data.products) {
-              setCloudProducts(data.products);
-              window.firebaseBridge.products = data.products;
+              // Ensure uniqueness
+              const uniqueProds = [];
+              const seenNames = new Set();
+              (data.products || []).forEach(p => {
+                if (p && p.name) {
+                  const norm = p.name.toLowerCase().trim();
+                  if (!seenNames.has(norm)) {
+                    seenNames.add(norm);
+                    uniqueProds.push(p);
+                  }
+                }
+              });
+              setCloudProducts(uniqueProds);
             }
             if (data.txns) {
               setCloudBills(data.txns);
-              window.firebaseBridge.bills = data.txns;
             }
           }
           document.getElementById(callbackName)?.remove();
@@ -234,7 +266,7 @@
 
         const script = document.createElement("script");
         script.id = callbackName;
-        script.src = `${SCRIPT_URL}?action=getData&callback=${callbackName}`;
+        script.src = `${scriptUrl}?action=getData&callback=${callbackName}`;
         document.body.appendChild(script);
       };
 
@@ -245,9 +277,9 @@
           if (bleDevice && !bleCharacteristic) {
             reconnectBLEPrinterQuietly();
           }
-        }, 4000);
+        }, 5000);
         return () => clearInterval(interval);
-      }, [bleDevice, bleCharacteristic]);
+      }, [scriptUrl, bleDevice, bleCharacteristic]);
 
       useEffect(() => {
         if (currentTab === "bill" && custRef.current) {
@@ -378,6 +410,17 @@
         }
 
         const displayCasing = toTitleCase(rawProdName);
+        
+        // Auto-save product to cloud directory if unique
+        const normalizedProdName = getNormalizedKey(displayCasing);
+        const existsInCloud = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === normalizedProdName);
+        if (!existsInCloud) {
+          try {
+            await window.firebaseBridge.addProductToCloud({ name: displayCasing });
+            setCloudProducts(prev => [...prev, { id: Date.now(), name: displayCasing }]);
+          } catch(err) { console.error("Auto product sync fail", err); }
+        }
+
         const itemObj = {
           id: Date.now() + Math.random(), qty: parsedQty, name: displayCasing, code: codeValue,
           basePrice: unitPrice, less: "—", finalUnitPrice: unitPrice, totalAmount: parsedQty * unitPrice
@@ -449,21 +492,36 @@
         triggerNotification(`Applied flat ₹${amt} discount to all items!`);
       };
 
+      const applyGroupedLessToBagged = (productName, lessAmount) => {
+        const amt = parseFloat(lessAmount) || 0;
+        setBaggedItems(prev => prev.map(item => {
+          if (getNormalizedKey(item.name) === getNormalizedKey(productName)) {
+            const updated = { ...item, less: String(amt) };
+            updated.finalUnitPrice = Math.max(0, updated.basePrice - amt);
+            updated.totalAmount = updated.qty * updated.finalUnitPrice;
+            return updated;
+          }
+          return item;
+        }));
+        triggerNotification(`Applied ₹${amt} Less to all "${productName}" items!`);
+      };
+
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = itemsList.reduce((acc, i) => acc + i.totalAmount, 0);
+        const { showCompanyHeader, showDate, showCustomerMeta, showFooterThankYou, fontSize, fontFamily, boldHeaders } = printSettings;
         
         let receiptHTML = `
-          <div class="text-center pb-4 mb-4 border-b-8 border-black">
-            <h2 class="text-[52px] font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
-            <p class="text-[28px] font-black mt-1">Rough Statement Profile</p>
-            <div class="mt-3.5 text-center text-[32px] font-black border-y-4 border-dashed border-black py-2.5">
-              ${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) - ${dateTimeStr}
-            </div>
+          <div class="text-center pb-4 mb-4 border-b-8 border-black" style="font-family: '${fontFamily}', monospace;">
+            ${showCompanyHeader ? `<h2 style="font-size: ${fontSize};" class="font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
+            <p style="font-size: calc(${fontSize} * 0.55);" class="font-black mt-1">Rough Statement Profile</p>` : ""}
+            ${showCustomerMeta ? `<div class="mt-3.5 text-center font-black border-y-4 border-dashed border-black py-2.5" style="font-size: calc(${fontSize} * 0.65);">
+              ${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) ${showDate ? `- ${dateTimeStr}` : ""}
+            </div>` : ""}
           </div>
-          <table class="w-full text-left mt-4 border-collapse text-[38px] font-black">
+          <table class="w-full text-left mt-4 border-collapse font-black" style="font-size: ${fontSize}; font-family: '${fontFamily}', monospace;">
             <thead>
-              <tr class="border-b-8 border-black text-[30px] font-black uppercase">
+              <tr class="border-b-8 border-black uppercase" style="font-size: calc(${fontSize} * 0.85); font-weight: ${boldHeaders ? '900' : '600'};">
                 <th class="py-3.5 w-20 text-center">QT</th>
                 <th class="py-3.5 pl-1">ITEM</th>
                 <th class="py-3.5 text-right w-40">P</th>
@@ -476,17 +534,17 @@
         sortedItems.forEach((item, index) => {
           receiptHTML += `
             <tr class="align-top border-b-2 border-stone-250 py-7">
-              <td class="py-4 text-center font-mono font-black text-[38px]">${Math.round(item.qty)}</td>
-              <td class="py-4 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight text-[38px]">
+              <td class="py-4 text-center font-mono font-black" style="font-size: ${fontSize};">${Math.round(item.qty)}</td>
+              <td class="py-4 font-black uppercase whitespace-pre-wrap break-all pl-1 leading-tight" style="font-size: ${fontSize};">
                 <div class="font-black leading-tight">${item.name.trim().toUpperCase()}</div>
                 ${item.code && item.code !== "—" ? `
-                  <div class="text-[26px] text-stone-600 font-mono mt-0.5 font-medium tracking-wide leading-none">
+                  <div style="font-size: calc(${fontSize} * 0.7);" class="text-stone-600 font-mono mt-0.5 font-medium tracking-wide leading-none">
                     ${item.code.toUpperCase()}
                   </div>
                 ` : ""}
               </td>
-              <td class="py-4 text-right font-mono font-black text-[38px]">${Math.round(item.finalUnitPrice)}</td>
-              <td class="py-4 text-right font-mono font-black text-[38px]">${Math.round(item.totalAmount)}</td>
+              <td class="py-4 text-right font-mono font-black" style="font-size: ${fontSize};">${Math.round(item.finalUnitPrice)}</td>
+              <td class="py-4 text-right font-mono font-black" style="font-size: ${fontSize};">${Math.round(item.totalAmount)}</td>
             </tr>
           `;
 
@@ -502,20 +560,20 @@
         receiptHTML += `
             </tbody>
           </table>
-          <div class="mt-10 pt-5 border-t-8 border-dashed border-black text-right space-y-3 text-[38px] font-black">
+          <div class="mt-10 pt-5 border-t-8 border-dashed border-black text-right space-y-3 font-black" style="font-size: ${fontSize}; font-family: '${fontFamily}', monospace;">
             <div class="flex justify-between font-black">
               <span>Gross Liability:</span>
               <span>${Math.round(total)}</span>
             </div>
-            <div class="flex justify-between text-[48px] font-black border-t-8 border-black pt-4 mt-1">
+            <div class="flex justify-between font-black border-t-8 border-black pt-4 mt-1" style="font-size: calc(${fontSize} * 1.25);">
               <span>Net Total:</span>
               <span>${Math.round(total)}</span>
             </div>
           </div>
-          <div class="mt-16 text-center text-[38px] font-black pt-6 border-t-4 border-black">
+          ${showFooterThankYou ? `<div class="mt-16 text-center font-black pt-6 border-t-4 border-black" style="font-size: ${fontSize}; font-family: '${fontFamily}', monospace;">
             Thank You For Your Visit<br/>
             Please Visit Again
-          </div>
+          </div>` : ""}
         `;
 
         return receiptHTML;
@@ -709,6 +767,7 @@
         if (deleteProductFromCloud) {
           try {
             await deleteProductFromCloud(name);
+            setCloudProducts(prev => prev.filter(p => getNormalizedKey(p.name) !== getNormalizedKey(name)));
             triggerNotification("Product deleted from Sheets catalog.");
           } catch (err) {
             console.error(err);
@@ -747,22 +806,33 @@
         if (parserRef.current) parserRef.current.focus();
       };
 
-      const getSecureLogBills = () => isVerified ? cloudBills : cloudBills.slice(0, 2);
+      // Most recent log entries first
+      const getSecureLogBills = () => {
+        const sorted = [...cloudBills].sort((a, b) => {
+          const timeA = a.timestamp || new Date(a.date).getTime() || 0;
+          const timeB = b.timestamp || new Date(b.date).getTime() || 0;
+          return timeB - timeA;
+        });
+        return isVerified ? sorted : sorted.slice(0, 2);
+      };
 
       const handleProductAddSubmit = async (e) => {
         e.preventDefault();
         const trimmed = newProdName.trim();
         if (!trimmed) return;
 
-        const isDuplicate = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(trimmed));
+        const normName = getNormalizedKey(trimmed);
+        const isDuplicate = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === normName);
         if (isDuplicate) {
           triggerNotification("Product already exists inside Sheets!");
           return;
         }
 
-        const payload = { name: toTitleCase(trimmed) };
+        const titleCased = toTitleCase(trimmed);
+        const payload = { name: titleCased };
         try {
           await window.firebaseBridge.addProductToCloud(payload);
+          setCloudProducts(prev => [...prev, { id: Date.now(), name: titleCased }]);
           setNewProdNameState("");
           triggerNotification("Product synced to Google Sheets!");
         } catch (err) {
@@ -778,23 +848,36 @@
 
         esc.push(0x1B, 0x40); // Init
         esc.push(0x1B, 0x61, 0x01); // Center
-        esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
-        esc.push(...encoder.encode(`${custName.toUpperCase()} - ${activeDate}\n`));
+        if (printSettings.showCompanyHeader) {
+          esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
+        }
+        if (printSettings.showCustomerMeta) {
+          esc.push(...encoder.encode(`${custName.toUpperCase()} ${printSettings.showDate ? `- ${activeDate}` : ""}\n`));
+        }
         esc.push(...encoder.encode("--------------------------------\n"));
         
         esc.push(0x1B, 0x61, 0x00); // Left align
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         sortedItems.forEach(item => {
-          const nameStr = item.name.trim().toUpperCase().slice(0, 15);
+          const nameStr = item.name.trim().toUpperCase();
           const qStr = String(Math.round(item.qty)).padEnd(3);
           const pStr = String(Math.round(item.finalUnitPrice)).padStart(4);
           const totalStr = String(Math.round(item.totalAmount)).padStart(6);
-          esc.push(...encoder.encode(`${qStr} ${nameStr.padEnd(15)} ${pStr} ${totalStr}\n`));
+          
+          // Print item name in one line, and code in the next line only if code is present (e.g. 120n, 110no)
+          esc.push(...encoder.encode(`${qStr} ${nameStr.slice(0, 15).padEnd(15)} ${pStr} ${totalStr}\n`));
+          if (item.code && item.code !== "—" && item.code.trim() !== "") {
+            esc.push(...encoder.encode(`    [Code: ${item.code.toUpperCase()}]\n`));
+          }
         });
 
         esc.push(...encoder.encode("--------------------------------\n"));
         const sumTotal = Math.round(itemsList.reduce((acc, i) => acc + i.totalAmount, 0));
         esc.push(...encoder.encode(`TOTAL LIABILITY:         ${sumTotal}\n\n\n`));
+        if (printSettings.showFooterThankYou) {
+          esc.push(0x1B, 0x61, 0x01); // Center
+          esc.push(...encoder.encode("Thank You For Your Visit\nPlease Visit Again\n\n\n"));
+        }
         esc.push(0x1D, 0x56, 0x42, 0x00); // Cut
 
         const bytes = new Uint8Array(esc);
@@ -805,13 +888,20 @@
 
       const getSortedProductsLocal = () => {
         if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
-        return [...cloudProducts]
-          .filter(p => p && typeof p === 'object' && p.name)
-          .sort((a, b) => {
-            const nameA = (a.name || "").trim();
-            const nameB = (b.name || "").trim();
-            return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
-          });
+        const uniqueMap = new Map();
+        cloudProducts.forEach(p => {
+          if (p && p.name) {
+            const key = getNormalizedKey(p.name);
+            if (!uniqueMap.has(key)) {
+              uniqueMap.set(key, p);
+            }
+          }
+        });
+        return Array.from(uniqueMap.values()).sort((a, b) => {
+          const nameA = (a.name || "").trim();
+          const nameB = (b.name || "").trim();
+          return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+        });
       };
 
       const sortedProductsLocal = getSortedProductsLocal();
@@ -821,6 +911,14 @@
       const filteredSheetsCustomers = customerName.trim() === "" 
         ? [] 
         : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
+
+      // Calculate total number of items for a product name currently in Fast Draft
+      const getFastDraftItemCount = (productName) => {
+        const norm = getNormalizedKey(productName);
+        return addedItems
+          .filter(item => getNormalizedKey(item.name) === norm)
+          .reduce((sum, item) => sum + item.qty, 0);
+      };
 
       return (
         <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative font-sans text-stone-900">
@@ -900,17 +998,23 @@
               <div className="flex-grow flex flex-col gap-2.5 overflow-hidden">
                 
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Product Directory Shortcuts</span>
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Product Directory Shortcuts (Total Count in Draft)</span>
                   <div className="flex gap-1 overflow-x-auto pb-1 custom-scroll">
-                    {sortedProductsLocal.slice(0, 15).map(p => (
-                      <button key={p.id} type="button" onClick={() => {
-                        setParserInput(prev => {
-                          const m = prev.match(/^\d+(\.\d+)?\s+/);
-                          return `${m ? m[0] : "1 "}${p.name} `;
-                        });
-                        if (parserRef.current) parserRef.current.focus();
-                      }} className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 border rounded-lg text-[11px] font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-xs">{p.name}</button>
-                    ))}
+                    {sortedProductsLocal.slice(0, 15).map(p => {
+                      const draftCount = getFastDraftItemCount(p.name);
+                      return (
+                        <button key={p.id} type="button" onClick={() => {
+                          setParserInput(prev => {
+                            const m = prev.match(/^\d+(\.\d+)?\s+/);
+                            return `${m ? m[0] : "1 "}${p.name} `;
+                          });
+                          if (parserRef.current) parserRef.current.focus();
+                        }} className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 border rounded-lg text-[11px] font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-xs flex items-center gap-1.5">
+                          <span>{p.name}</span>
+                          {draftCount > 0 && <span className="bg-amber-500 text-stone-950 font-black px-1.5 py-0.5 rounded-full text-[9px]">{draftCount}</span>}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -931,9 +1035,15 @@
                   </form>
                   {suggestionsLocal.length > 0 && (
                     <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/45 backdrop-blur-lg border border-white/20 shadow-xl rounded-lg z-50 divide-y divide-white/20">
-                      {suggestionsLocal.map(p => (
-                        <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-white/30 text-stone-900 cursor-pointer">{p.name}</div>
-                      ))}
+                      {suggestionsLocal.map(p => {
+                        const draftCount = getFastDraftItemCount(p.name);
+                        return (
+                          <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-white/30 text-stone-900 cursor-pointer flex justify-between items-center">
+                            <span>{p.name}</span>
+                            {draftCount > 0 && <span className="text-[10px] bg-amber-500 text-stone-950 px-1.5 py-0.5 rounded font-black">Draft Qty: {draftCount}</span>}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1143,7 +1253,7 @@
             )}
 
             {currentTab === "products" && (
-              <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
+              <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-3">
                 <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0 shadow-xs">
                   <input 
                     type="text" 
@@ -1245,34 +1355,176 @@
                   />
                 </div>
 
-                <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs">
+                {/* Grouped Products with Less section */}
+                <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs space-y-2">
+                  <span className="block text-[9px] font-black text-stone-400 uppercase tracking-widest pb-1">Grouped Catalog & Less Applicator</span>
                   {sortedProductsLocal
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
-                    .map(p => (
-                      <div 
-                        key={p.id} 
-                        className={`flex justify-between items-center py-1.5 px-2 text-xs font-bold rounded cursor-pointer ${selectedCatalogProduct?.id === p.id ? 'bg-amber-100 text-stone-900' : 'hover:bg-stone-50'}`}
-                        onClick={() => setSelectedCatalogProduct(p)}
-                      >
-                        <span className="uppercase text-stone-800">{p.name}</span>
-                        <div className="flex gap-2">
-                          <button 
-                            type="button" 
-                            onClick={(e) => { e.stopPropagation(); setSelectedCatalogProduct(p); }} 
-                            className="text-indigo-500 hover:text-indigo-700 font-extrabold uppercase text-[10px]"
-                          >
-                            Merge
-                          </button>
-                          <button 
-                            type="button" 
-                            onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.name); }} 
-                            className="text-stone-300 hover:text-rose-600 transition-colors"
-                          >
-                            <i className="fa-solid fa-trash-can"></i>
-                          </button>
+                    .map(p => {
+                      const matchingBaggedCount = baggedItems.filter(i => getNormalizedKey(i.name) === getNormalizedKey(p.name)).length;
+                      return (
+                        <div 
+                          key={p.id} 
+                          className={`flex flex-col gap-1.5 py-2 px-2 text-xs font-bold rounded cursor-pointer ${selectedCatalogProduct?.id === p.id ? 'bg-amber-100 text-stone-900' : 'hover:bg-stone-50'}`}
+                          onClick={() => setSelectedCatalogProduct(p)}
+                        >
+                          <div className="flex justify-between items-center">
+                            <span className="uppercase text-stone-800 font-extrabold">{p.name} {matchingBaggedCount > 0 && <span className="text-[9px] bg-rose-600 text-white px-1.5 py-0.2 rounded-full font-mono">{matchingBaggedCount} in bag</span>}</span>
+                            <div className="flex gap-2">
+                              <button 
+                                type="button" 
+                                onClick={(e) => { e.stopPropagation(); setSelectedCatalogProduct(p); }} 
+                                className="text-indigo-500 hover:text-indigo-700 font-extrabold uppercase text-[10px]"
+                              >
+                                Merge
+                              </button>
+                              <button 
+                                type="button" 
+                                onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.name); }} 
+                                className="text-stone-300 hover:text-rose-600 transition-colors"
+                              >
+                                <i className="fa-solid fa-trash-can"></i>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Grouped Less Section for Bag items matching this product */}
+                          {matchingBaggedCount > 0 && (
+                            <div className="flex items-center gap-1.5 bg-stone-100 p-1 rounded font-mono text-[10px]">
+                              <span className="text-stone-600 font-black uppercase text-[8px]">Group Less (₹):</span>
+                              {[5, 10, 20, 50].map(amt => (
+                                <button
+                                  key={amt}
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); applyGroupedLessToBagged(p.name, amt); }}
+                                  className="px-2 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded font-black text-[9px]"
+                                >
+                                  ₹{amt}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                  ))}
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {currentTab === "settings" && (
+              <div className="flex-grow p-3 bg-stone-50 overflow-y-auto custom-scroll space-y-3 font-sans">
+                <div className="bg-white p-3 rounded-xl border shadow-xs space-y-2">
+                  <span className="block text-[10px] font-black text-stone-500 uppercase tracking-widest border-b pb-1">Archive Rollover / New Sheet URL</span>
+                  <p className="text-[10px] text-stone-600">If your Google Sheets becomes heavy, paste your new deployment Apps Script URL below to migrate data sources instantly:</p>
+                  <div className="flex gap-1.5">
+                    <input 
+                      type="text" 
+                      placeholder="Paste new Apps Script URL..."
+                      value={newSheetUrlInput}
+                      onChange={(e) => setNewSheetUrlInput(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border rounded-lg font-mono focus:outline-none"
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        const trimmed = newSheetUrlInput.trim();
+                        if (!trimmed.startsWith("https://")) {
+                          triggerNotification("Please enter a valid HTTPS Apps Script URL.");
+                          return;
+                        }
+                        setScriptUrl(trimmed);
+                        setNewSheetUrlInput("");
+                        triggerNotification("✓ Switched to new Google Sheet archive successfully!");
+                      }}
+                      className="px-3 py-2 bg-stone-900 text-white font-black text-xs rounded-lg uppercase whitespace-nowrap"
+                    >
+                      Switch Sheet
+                    </button>
+                  </div>
+                  <div className="text-[9px] text-stone-400 truncate">Current URL: {scriptUrl}</div>
+                </div>
+
+                <div className="bg-white p-3 rounded-xl border shadow-xs space-y-3">
+                  <span className="block text-[10px] font-black text-stone-500 uppercase tracking-widest border-b pb-1">Printed Receipt Display & Font Settings</span>
+                  
+                  <div className="space-y-2 text-xs">
+                    <label className="flex justify-between items-center cursor-pointer font-bold">
+                      <span>Show Company Header ("ESTIMATE RECEIPT")</span>
+                      <input 
+                        type="checkbox" 
+                        checked={printSettings.showCompanyHeader}
+                        onChange={e => setPrintSettings(prev => ({ ...prev, showCompanyHeader: e.target.checked }))}
+                        className="h-4 w-4 accent-amber-500"
+                      />
+                    </label>
+
+                    <label className="flex justify-between items-center cursor-pointer font-bold">
+                      <span>Show Date & Time</span>
+                      <input 
+                        type="checkbox" 
+                        checked={printSettings.showDate}
+                        onChange={e => setPrintSettings(prev => ({ ...prev, showDate: e.target.checked }))}
+                        className="h-4 w-4 accent-amber-500"
+                      />
+                    </label>
+
+                    <label className="flex justify-between items-center cursor-pointer font-bold">
+                      <span>Show Customer & City Metadata</span>
+                      <input 
+                        type="checkbox" 
+                        checked={printSettings.showCustomerMeta}
+                        onChange={e => setPrintSettings(prev => ({ ...prev, showCustomerMeta: e.target.checked }))}
+                        className="h-4 w-4 accent-amber-500"
+                      />
+                    </label>
+
+                    <label className="flex justify-between items-center cursor-pointer font-bold">
+                      <span>Show Footer Thank You Message</span>
+                      <input 
+                        type="checkbox" 
+                        checked={printSettings.showFooterThankYou}
+                        onChange={e => setPrintSettings(prev => ({ ...prev, showFooterThankYou: e.target.checked }))}
+                        className="h-4 w-4 accent-amber-500"
+                      />
+                    </label>
+
+                    <label className="flex justify-between items-center cursor-pointer font-bold">
+                      <span>Bold Headers & Totals</span>
+                      <input 
+                        type="checkbox" 
+                        checked={printSettings.boldHeaders}
+                        onChange={e => setPrintSettings(prev => ({ ...prev, boldHeaders: e.target.checked }))}
+                        className="h-4 w-4 accent-amber-500"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="pt-2 border-t space-y-2">
+                    <div className="flex justify-between items-center text-xs font-bold">
+                      <span>Font Size Scale:</span>
+                      <select 
+                        value={printSettings.fontSize}
+                        onChange={e => setPrintSettings(prev => ({ ...prev, fontSize: e.target.value }))}
+                        className="px-2 py-1 border rounded bg-stone-50 font-mono text-xs"
+                      >
+                        <option value="28px">Compact (28px)</option>
+                        <option value="38px">Standard (38px)</option>
+                        <option value="48px">Large (48px)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex justify-between items-center text-xs font-bold">
+                      <span>Font Family Style:</span>
+                      <select 
+                        value={printSettings.fontFamily}
+                        onChange={e => setPrintSettings(prev => ({ ...prev, fontFamily: e.target.value }))}
+                        className="px-2 py-1 border rounded bg-stone-50 font-mono text-xs"
+                      >
+                        <option value="Courier Prime">Courier Prime (Monospace)</option>
+                        <option value="Inter">Inter (Sans-Serif)</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -1281,7 +1533,7 @@
               <div className="flex-grow p-2.5 bg-stone-50 overflow-y-auto custom-scroll space-y-3 flex flex-col min-h-0">
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0">
                   <div className="flex justify-between items-center border-b pb-1">
-                    <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">Audit Ledger Log Entries</span>
+                    <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">Audit Ledger Log Entries (Recent First)</span>
                     <span className="text-[9px] text-stone-400 font-mono">Synced bills: {cloudBills.length}</span>
                   </div>
 
@@ -1386,44 +1638,53 @@
 
           </main>
 
-          <footer className="bg-stone-900 border-t py-3 px-4 no-print flex-shrink-0 z-40 shadow-lg">
+          <footer className="bg-stone-900 border-t py-2 px-2 no-print flex-shrink-0 z-40 shadow-lg">
             <div className="max-w-md mx-auto flex justify-around items-center">
               
               <button 
                 type="button" 
                 onClick={handleFastDraftTabClick} 
-                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all ${currentTab === "bill" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+                className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all ${currentTab === "bill" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
               >
-                <i className="fa-solid fa-receipt text-xl"></i>
-                <span className="text-[11px] font-bold uppercase tracking-wider">Fast Draft</span>
+                <i className="fa-solid fa-receipt text-lg"></i>
+                <span className="text-[10px] font-bold uppercase tracking-wider">Fast Draft</span>
               </button>
 
               <button 
                 type="button" 
                 onClick={() => setCurrentTab("bag")} 
-                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all relative ${currentTab === "bag" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+                className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all relative ${currentTab === "bag" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
               >
-                <i className="fa-solid fa-bag-shopping text-xl"></i>
-                <span className="text-[11px] font-bold uppercase tracking-wider">Tally Bag</span>
+                <i className="fa-solid fa-bag-shopping text-lg"></i>
+                <span className="text-[10px] font-bold uppercase tracking-wider">Tally Bag</span>
                 {baggedItems.length > 0 && <span className="absolute -top-1 right-2 bg-rose-600 text-white text-[8px] font-black h-4 w-4 rounded-full flex items-center justify-center animate-bounce">{baggedItems.length}</span>}
               </button>
 
               <button 
                 type="button" 
                 onClick={() => setCurrentTab("products")} 
-                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+                className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
               >
-                <i className="fa-solid fa-box-open text-xl"></i>
-                <span className="text-[11px] font-bold uppercase tracking-wider">Products</span>
+                <i className="fa-solid fa-box-open text-lg"></i>
+                <span className="text-[10px] font-bold uppercase tracking-wider">Products</span>
+              </button>
+
+              <button 
+                type="button" 
+                onClick={() => setCurrentTab("settings")} 
+                className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all ${currentTab === "settings" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
+              >
+                <i className="fa-solid fa-gear text-lg"></i>
+                <span className="text-[10px] font-bold uppercase tracking-wider">Settings</span>
               </button>
 
               <button 
                 type="button" 
                 onClick={() => setCurrentTab("logs")} 
-                className={`flex flex-col items-center gap-1.5 py-1.5 px-4 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-850" : "text-stone-400"}`}
+                className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
               >
-                <i className="fa-solid fa-clock-rotate-left text-xl"></i>
-                <span className="text-[11px] font-bold uppercase tracking-wider">Historic</span>
+                <i className="fa-solid fa-clock-rotate-left text-lg"></i>
+                <span className="text-[10px] font-bold uppercase tracking-wider">Historic</span>
               </button>
 
             </div>
