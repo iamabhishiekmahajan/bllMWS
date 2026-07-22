@@ -12,9 +12,9 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600;700;800;900&family=Roboto+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
   <script>
     tailwind.config = {
@@ -23,6 +23,7 @@
           fontFamily: {
             sans: ['Inter', 'sans-serif'],
             mono: ['Courier Prime', 'monospace'],
+            robotomono: ['Roboto Mono', 'monospace'],
           }
         }
       }
@@ -39,15 +40,14 @@
       padding: 0;
     }
     #printable-bill-invoice { display: none; }
-    #pdf-export-container {
+    #image-export-container {
       position: absolute;
       left: -9999px;
       top: 0;
-      width: 200mm;
+      width: 320px;
       background: #ffffff;
       color: #000000;
-      font-family: 'Courier Prime', monospace;
-      padding: 5mm;
+      padding: 12px;
       box-sizing: border-box;
       z-index: -50;
     }
@@ -97,7 +97,7 @@
 </head>
 <body class="text-stone-900 font-sans antialiased selection:bg-stone-300 bg-stone-100">
   <div id="root" class="h-[100dvh] w-full flex flex-col overflow-hidden"></div>
-  <div id="pdf-export-container"></div>
+  <div id="image-export-container"></div>
 
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo } = React;
@@ -205,8 +205,19 @@
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
       const [bleStatus, setBleStatus] = useState("Disconnected");
-      const [globalBagLess, setGlobalBagLess] = useState("");
       const [groupLessInputs, setGroupLessInputs] = useState({});
+
+      // Printable Settings State
+      const [printSettings, setPrintSettings] = useState({
+        showName: true,
+        showCity: true,
+        showDate: true,
+        showTime: true,
+        fontSize: '24', // px for receipt text
+        fontFamily: 'Courier Prime',
+        rowSpacing: '8', // px padding vertical
+        colSpacing: '4'  // px padding horizontal
+      });
 
       // Date Range Report States
       const [reportPreset, setReportPreset] = useState("last7");
@@ -215,6 +226,11 @@
 
       const custRef = useRef(null);
       const parserRef = useRef(null);
+
+      const triggerNotification = (msg) => {
+        setNotification(msg);
+        setTimeout(() => setNotification(""), 3500);
+      };
 
       const syncDataFromGoogleSheets = () => {
         const callbackName = "handleSheetsSync_" + Math.floor(Math.random() * 100000);
@@ -278,11 +294,6 @@
         }
       }, [currentTab]);
 
-      const triggerNotification = (msg) => {
-        setNotification(msg);
-        setTimeout(() => setNotification(""), 3500);
-      };
-
       const getThreeLetterCode = (val) => {
         if (!val) return "GEN";
         const cleaned = val.replace(/[^a-zA-Z]/g, "").toUpperCase();
@@ -298,7 +309,14 @@
         baseDate.setHours(currentRealTime.getHours(), currentRealTime.getMinutes());
         const day = String(baseDate.getDate()).padStart(2, '0');
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        return `${day},${months[baseDate.getMonth()]} ${String(baseDate.getHours()).padStart(2, '0')}:${String(baseDate.getMinutes()).padStart(2, '0')}`;
+        
+        const datePart = `${day},${months[baseDate.getMonth()]}`;
+        const timePart = `${String(baseDate.getHours()).padStart(2, '0')}:${String(baseDate.getMinutes()).padStart(2, '0')}`;
+
+        if (printSettings.showDate && printSettings.showTime) return `${datePart} ${timePart}`;
+        if (printSettings.showDate) return datePart;
+        if (printSettings.showTime) return timePart;
+        return "";
       };
 
       const handleCustomerSearchAndSelect = (nameVal) => {
@@ -318,9 +336,8 @@
 
       const handleResetAll = () => {
         setCustomerName(""); setCustomerCity(""); setDiscountX("0");
-        setBaggedItems([]); setIsBillGenerated(false); setEditingBillId(null);
+        setBaggedItems([]); setEditingBillId(null);
         setParserInput("");
-        setGlobalBagLess("");
         setGroupLessInputs({});
         setTimeout(() => {
           if (parserRef.current) parserRef.current.focus();
@@ -356,42 +373,61 @@
         return !isNaN(parseFloat(cleanCode)) ? parseFloat(cleanCode) : 0;
       };
 
-      // FAST PARSER SUBMIT: Immediately pushes into baggedItems
+      // FAST PARSER SUBMIT
       const handleParserSubmit = (e) => {
         e.preventDefault();
         const rawInput = parserInput.trim();
         if (!rawInput) return;
-        
-        const match = rawInput.match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
-        if (!match) {
-          triggerNotification("Format: Qty Item Code/Price (e.g. 5 sehra 20n)");
-          return;
-        }
-        const parsedQty = parseFloat(match[1]);
-        const tokens = match[2].trim().split(/\s+/);
-        if (tokens.length === 0) return;
 
-        let codeValue = "—";
-        let unitPrice = 0;
-        let finalTokens = [...tokens];
-        const lastToken = tokens[tokens.length - 1];
-        
         const isSuffixCode = (str) => {
           const s = str.toLowerCase().trim();
           return s.endsWith('n') || s.endsWith('no') || s.endsWith('nu');
         };
 
-        if (isSuffixCode(lastToken)) {
-          codeValue = lastToken;
-          unitPrice = calculateRateForToken(codeValue, discountX);
-          finalTokens.pop();
-        } else if (!isNaN(parseFloat(lastToken)) && isFinite(lastToken)) {
-          codeValue = "—";
-          unitPrice = parseFloat(lastToken);
-          finalTokens.pop();
+        let parsedQty = 1;
+        let codeValue = "—";
+        let unitPrice = 0;
+        let rawProdName = "";
+
+        const match = rawInput.match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
+
+        if (match) {
+          parsedQty = parseFloat(match[1]);
+          const tokens = match[2].trim().split(/\s+/);
+          const lastToken = tokens[tokens.length - 1];
+
+          if (isSuffixCode(lastToken)) {
+            codeValue = lastToken;
+            unitPrice = calculateRateForToken(codeValue, discountX);
+            tokens.pop();
+          } else if (!isNaN(parseFloat(lastToken)) && isFinite(lastToken)) {
+            codeValue = "—";
+            unitPrice = parseFloat(lastToken);
+            tokens.pop();
+          }
+
+          rawProdName = tokens.join(" ").trim();
+        } else {
+          parsedQty = 1;
+          const tokens = rawInput.split(/\s+/);
+          const lastToken = tokens[tokens.length - 1];
+
+          if (isSuffixCode(lastToken)) {
+            codeValue = lastToken;
+            unitPrice = calculateRateForToken(codeValue, discountX);
+            tokens.pop();
+            rawProdName = tokens.join(" ").trim();
+          } else if (!isNaN(parseFloat(lastToken)) && isFinite(lastToken)) {
+            codeValue = "—";
+            unitPrice = parseFloat(lastToken);
+            tokens.pop();
+            rawProdName = tokens.join(" ").trim();
+          } else {
+            rawProdName = rawInput;
+            unitPrice = 0;
+          }
         }
 
-        let rawProdName = finalTokens.join(" ").trim();
         if (!rawProdName) {
           rawProdName = lastProductName ? lastProductName : "Item";
         } else {
@@ -452,22 +488,11 @@
         }));
       };
 
-      const applyGlobalBagLessDiscount = (lessAmountStr) => {
-        const amt = parseFloat(lessAmountStr) || 0;
-        setBaggedItems(prev => prev.map(item => {
-          const updated = { ...item, less: lessAmountStr };
-          updated.finalUnitPrice = Math.max(0, updated.basePrice - amt);
-          updated.totalAmount = updated.qty * updated.finalUnitPrice;
-          return updated;
-        }));
-        triggerNotification(`Applied flat ₹${amt} discount to all items in bag!`);
-      };
-
-      // Group Less Application (e.g., Apply less to all "Chura" items)
-      const applyGroupLessDiscount = (groupNameKey, lessValStr) => {
+      // Group Less Handler for all items of same item name
+      const applyGroupLessDiscount = (groupKey, lessValStr) => {
         const amt = parseFloat(lessValStr) || 0;
         setBaggedItems(prev => prev.map(item => {
-          if (getNormalizedKey(item.name) === groupNameKey) {
+          if (getNormalizedKey(item.name) === groupKey) {
             const updated = { ...item, less: lessValStr };
             updated.finalUnitPrice = Math.max(0, updated.basePrice - amt);
             updated.totalAmount = updated.qty * updated.finalUnitPrice;
@@ -475,10 +500,10 @@
           }
           return item;
         }));
-        triggerNotification(`Applied ₹${amt} Group Less to all "${groupNameKey.toUpperCase()}"!`);
+        triggerNotification(`Applied ₹${amt} Less to all ${groupKey.toUpperCase()} items!`);
       };
 
-      // Grouping bagged items by Product Name
+      // Grouping bagged items by Item Name
       const groupedBaggedItems = useMemo(() => {
         const groups = {};
         baggedItems.forEach(item => {
@@ -499,28 +524,62 @@
         return Object.values(groups);
       }, [baggedItems]);
 
-      // Renders receipts for printer/spool.
-      // - Shows code directly below item name (only code, e.g. 120n / 120no)
-      // - Adds light dotted line after every 5 items
+      // Top 10 Most Frequently Billed Unique Products
+      const topBilledProducts = useMemo(() => {
+        const counts = {};
+        cloudBills.forEach(b => {
+          if (Array.isArray(b.items)) {
+            b.items.forEach(i => {
+              if (i && i.name) {
+                const key = getNormalizedKey(i.name);
+                counts[key] = (counts[key] || 0) + (i.qty || 1);
+              }
+            });
+          }
+        });
+
+        return [...cloudProducts]
+          .filter(p => p && p.name)
+          .sort((a, b) => {
+            const countA = counts[getNormalizedKey(a.name)] || 0;
+            const countB = counts[getNormalizedKey(b.name)] || 0;
+            if (countB !== countA) return countB - countA;
+            return a.name.localeCompare(b.name);
+          });
+      }, [cloudProducts, cloudBills]);
+
+      // Renders receipts for printer/spool utilizing Print Settings
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = itemsList.reduce((acc, i) => acc + i.totalAmount, 0);
-        
+
+        const headerDetails = [];
+        if (printSettings.showName && custName) headerDetails.push(getThreeLetterCode(custName));
+        if (printSettings.showCity && cityVal) headerDetails.push(`(${getThreeLetterCode(cityVal)})`);
+        if (dateTimeStr) headerDetails.push(`- ${dateTimeStr}`);
+
+        const fontFamCss = printSettings.fontFamily === 'Roboto Mono' ? "'Roboto Mono', monospace" : "'Courier Prime', monospace";
+        const fSizePx = `${printSettings.fontSize}px`;
+        const rPadPx = `${printSettings.rowSpacing}px`;
+        const cPadPx = `${printSettings.colSpacing}px`;
+
         let receiptHTML = `
-          <div class="text-center pb-3 mb-3 border-b-4 border-black font-mono">
-            <h2 class="text-[36px] font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
-            <p class="text-[20px] font-bold mt-1">Rough Statement Profile</p>
-            <div class="mt-2 text-center text-[24px] font-black border-y-2 border-dashed border-black py-1.5">
-              ${getThreeLetterCode(custName)} (${getThreeLetterCode(cityVal)}) - ${dateTimeStr}
-            </div>
+          <div style="font-family: ${fontFamCss};" class="text-center pb-3 mb-3 border-b-4 border-black">
+            <h2 style="font-size: ${Math.round(parseInt(printSettings.fontSize)*1.4)}px;" class="font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
+            <p style="font-size: ${Math.round(parseInt(printSettings.fontSize)*0.8)}px;" class="font-bold mt-1">Rough Statement Profile</p>
+            ${headerDetails.length > 0 ? `
+              <div style="font-size: ${fSizePx};" class="mt-2 text-center font-black border-y-2 border-dashed border-black py-1.5">
+                ${headerDetails.join(" ")}
+              </div>
+            ` : ""}
           </div>
-          <table class="w-full text-left mt-2 border-collapse text-[26px] font-mono font-bold">
+          <table style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="w-full text-left mt-2 border-collapse font-bold">
             <thead>
-              <tr class="border-b-4 border-black text-[22px] font-black uppercase">
-                <th class="py-2 w-16 text-center">QT</th>
-                <th class="py-2 pl-1">ITEM</th>
-                <th class="py-2 text-right w-28">P</th>
-                <th class="py-2 text-right w-36">AMT</th>
+              <tr class="border-b-4 border-black font-black uppercase">
+                <th style="padding: ${rPadPx} ${cPadPx};" class="w-16 text-center">QT</th>
+                <th style="padding: ${rPadPx} ${cPadPx};">ITEM</th>
+                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-28">P</th>
+                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-36">AMT</th>
               </tr>
             </thead>
             <tbody>
@@ -530,18 +589,17 @@
           const rawCodeOnly = (item.code && item.code !== "—") ? item.code.trim() : "";
 
           receiptHTML += `
-            <tr class="align-top border-b border-stone-200 py-3">
-              <td class="py-2 text-center font-mono font-bold text-[26px]">${Math.round(item.qty)}</td>
-              <td class="py-2 font-bold uppercase whitespace-pre-wrap break-all pl-1 leading-tight text-[26px]">
+            <tr class="align-top border-b border-stone-200">
+              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${Math.round(item.qty)}</td>
+              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="font-bold uppercase whitespace-pre-wrap break-all leading-tight">
                 <div>${item.name.trim().toUpperCase()}</div>
-                ${rawCodeOnly ? `<div class="text-[20px] text-stone-700 font-mono font-normal tracking-wide">${rawCodeOnly}</div>` : ""}
+                ${rawCodeOnly ? `<div style="font-size: ${Math.round(parseInt(printSettings.fontSize)*0.75)}px;" class="text-stone-700 font-normal tracking-wide">${rawCodeOnly}</div>` : ""}
               </td>
-              <td class="py-2 text-right font-mono font-bold text-[26px]">${Math.round(item.finalUnitPrice)}</td>
-              <td class="py-2 text-right font-mono font-bold text-[26px]">${Math.round(item.totalAmount)}</td>
+              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(item.finalUnitPrice)}</td>
+              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(item.totalAmount)}</td>
             </tr>
           `;
 
-          // Horizontal light dotted line after every 5 lines
           if ((index + 1) % 5 === 0 && index !== sortedItems.length - 1) {
             receiptHTML += `
               <tr>
@@ -554,17 +612,17 @@
         receiptHTML += `
             </tbody>
           </table>
-          <div class="mt-6 pt-3 border-t-4 border-dashed border-black text-right space-y-2 text-[26px] font-mono font-bold">
+          <div style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="mt-6 pt-3 border-t-4 border-dashed border-black text-right space-y-2 font-bold">
             <div class="flex justify-between font-black">
               <span>Gross Liability:</span>
               <span>₹${Math.round(total)}</span>
             </div>
-            <div class="flex justify-between text-[32px] font-black border-t-4 border-black pt-2 mt-1">
+            <div style="font-size: ${Math.round(parseInt(printSettings.fontSize)*1.25)}px;" class="flex justify-between font-black border-t-4 border-black pt-2 mt-1">
               <span>Net Total:</span>
               <span>₹${Math.round(total)}</span>
             </div>
           </div>
-          <div class="mt-10 text-center text-[24px] font-mono font-bold pt-4 border-t-2 border-black">
+          <div style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="mt-10 text-center font-bold pt-4 border-t-2 border-black">
             Thank You For Your Visit<br/>
             Please Visit Again
           </div>
@@ -582,7 +640,6 @@
         const printDateFormatted = formatInvoiceDateTime(billDate);
         const finalClientName = customerName.trim() || "Walk-In Customer";
 
-        // 1. DISPATCH PRINT IMMEDIATELY (Do not await network!)
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           printBody.innerHTML = renderReceiptForSpool(baggedItems, finalClientName, customerCity, printDateFormatted);
@@ -601,7 +658,6 @@
 
         triggerNotification("✓ Bill Printed! Syncing to Google Sheets in background...");
 
-        // 2. STORE DATA IN CLOUD ASYNCHRONOUSLY
         const computedTotalSum = baggedItems.reduce((acc, i) => acc + i.totalAmount, 0);
         const billDataObject = {
           id: uniqueNumericId, customerName: finalClientName, customerCity: customerCity || "Local",
@@ -618,9 +674,9 @@
         }, 300);
       };
 
-      // FIXED PDF SHARING SYSTEM (Using offscreen rendering container)
-      const sharePDFReceipt = (items, custName, cityVal, activeDate) => {
-        const exportContainer = document.getElementById("pdf-export-container");
+      // SHARE BILL IMAGE FUNCTION
+      const shareBillImage = (items, custName, cityVal, activeDate) => {
+        const exportContainer = document.getElementById("image-export-container");
         if (!exportContainer) return;
 
         const printDateFormatted = formatInvoiceDateTime(activeDate);
@@ -628,46 +684,49 @@
 
         exportContainer.innerHTML = renderReceiptForSpool(items, finalClientName, cityVal, printDateFormatted);
 
-        const fileName = `Invoice_${getThreeLetterCode(finalClientName)}_${activeDate}.pdf`;
-        const options = {
-          margin: [2, 2, 2, 2],
-          filename: fileName,
-          image: { type: 'jpeg', quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true },
-          jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
-        };
+        triggerNotification("Generating shareable receipt image...");
 
-        triggerNotification("Generating shareable PDF...");
+        setTimeout(() => {
+          html2canvas(exportContainer, { scale: 2, useCORS: true, backgroundColor: "#ffffff" })
+            .then(async (canvas) => {
+              canvas.toBlob(async (blob) => {
+                if (!blob) {
+                  triggerNotification("Image export failed.");
+                  exportContainer.innerHTML = "";
+                  return;
+                }
+                const fileName = `Bill_${getThreeLetterCode(finalClientName)}_${activeDate}.png`;
+                const file = new File([blob], fileName, { type: 'image/png' });
 
-        html2pdf().set(options).from(exportContainer).toPdf().output('blob').then(async (blob) => {
-          const file = new File([blob], fileName, { type: 'application/pdf' });
-          
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            try {
-              await navigator.share({
-                files: [file],
-                title: `Rough Bill - ${finalClientName}`,
-                text: `PDF Receipt for ${finalClientName} (${cityVal})`
-              });
-              triggerNotification("✓ Shared successfully!");
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                  try {
+                    await navigator.share({
+                      files: [file],
+                      title: `Bill - ${finalClientName}`,
+                      text: `Receipt for ${finalClientName} (${cityVal})`
+                    });
+                    triggerNotification("✓ Shared successfully!");
+                    exportContainer.innerHTML = "";
+                    return;
+                  } catch (shareErr) {
+                    console.warn("Native share error, downloading instead:", shareErr);
+                  }
+                }
+
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = fileName;
+                link.click();
+                triggerNotification("✓ Image Downloaded!");
+                exportContainer.innerHTML = "";
+              }, 'image/png');
+            })
+            .catch(err => {
+              console.error("Canvas image export failed:", err);
+              triggerNotification("Image generation failed.");
               exportContainer.innerHTML = "";
-              return;
-            } catch (shareErr) {
-              console.warn("Share fallback to direct download:", shareErr);
-            }
-          }
-          
-          const link = document.createElement("a");
-          link.href = URL.createObjectURL(blob);
-          link.download = fileName;
-          link.click();
-          triggerNotification("✓ PDF downloaded!");
-          exportContainer.innerHTML = "";
-        }).catch(err => {
-          console.error("PDF generation fail:", err);
-          triggerNotification("✗ PDF error");
-          exportContainer.innerHTML = "";
-        });
+            });
+        }, 100);
       };
 
       const handleLogsItemPrint = (logItem) => {
@@ -813,7 +872,12 @@
         esc.push(0x1B, 0x40); // Init
         esc.push(0x1B, 0x61, 0x01); // Center
         esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
-        esc.push(...encoder.encode(`${custName.toUpperCase()} - ${activeDate}\n`));
+        
+        const headerText = [];
+        if (printSettings.showName && custName) headerText.push(custName.toUpperCase());
+        if (activeDate) headerText.push(activeDate);
+        if (headerText.length > 0) esc.push(...encoder.encode(`${headerText.join(" - ")}\n`));
+        
         esc.push(...encoder.encode("--------------------------------\n"));
         
         esc.push(0x1B, 0x61, 0x00); // Left align
@@ -847,22 +911,14 @@
         }
       };
 
-      const getSortedProductsLocal = () => {
-        if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
-        return [...cloudProducts]
-          .filter(p => p && typeof p === 'object' && p.name)
-          .sort((a, b) => (a.name || "").localeCompare((b.name || ""), undefined, { sensitivity: 'base' }));
-      };
-
-      const sortedProductsLocal = getSortedProductsLocal();
       const autocompleteQueryLocal = getParserAutocompleteQueryLocal();
-      const suggestionsLocal = autocompleteQueryLocal ? sortedProductsLocal.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
+      const suggestionsLocal = autocompleteQueryLocal ? topBilledProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
 
       const filteredSheetsCustomers = customerName.trim() === "" 
         ? [] 
         : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
 
-      // Date Range Bill Report Filtering (Excluding Walk-In)
+      // Date Range Bill Report Filtering
       const filteredReportBills = useMemo(() => {
         let startMs = 0;
         let endMs = Infinity;
@@ -893,6 +949,11 @@
       }, [cloudBills, reportPreset, reportStartDate, reportEndDate]);
 
       const handlePrintDateRangeReport = () => {
+        if (!isVerified) {
+          triggerNotification("Passcode required to print ledger report!");
+          return;
+        }
+
         if (filteredReportBills.length === 0) {
           triggerNotification("No registered customer bills found in this range.");
           return;
@@ -953,6 +1014,14 @@
       return (
         <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative font-sans text-stone-900">
           
+          {/* Bluetooth Disconnection Red Warning Bar */}
+          {bleStatus !== "Connected" && (
+            <div className="bg-rose-600 text-white py-1 px-4 text-center text-[10px] font-black uppercase tracking-wider no-print flex-shrink-0 z-50 flex items-center justify-center gap-1.5 shadow-sm">
+              <i className="fa-brands fa-bluetooth text-xs animate-pulse"></i>
+              <span>Bluetooth Printer Not Connected</span>
+            </div>
+          )}
+
           {notification && (
             <div className="bg-amber-500 text-stone-950 py-2 px-4 text-center text-xs font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50 shadow-md">
               {notification}
@@ -968,7 +1037,7 @@
               <div className="flex-grow min-w-0 relative" ref={custRef}>
                 <input 
                   type="text" 
-                  autoComplete="new-password"
+                  autoComplete="off"
                   autoCorrect="off"
                   spellCheck="false"
                   placeholder="Search Customer..."
@@ -1022,37 +1091,45 @@
                 
                 {/* Product Directory Shortcuts */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Catalog Directory Shortcuts</span>
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Top Billed Directory Shortcuts</span>
                   <div className="flex gap-1 overflow-x-auto pb-1 custom-scroll">
-                    {sortedProductsLocal.slice(0, 15).map(p => (
+                    {topBilledProducts.slice(0, 10).map(p => (
                       <button key={p.id} type="button" onClick={() => {
                         setParserInput(prev => {
                           const m = prev.match(/^\d+(\.\d+)?\s+/);
                           return `${m ? m[0] : "1 "}${p.name} `;
                         });
                         if (parserRef.current) parserRef.current.focus();
-                      }} className="px-2.5 py-1 bg-stone-100 hover:bg-stone-200 border rounded-lg text-[11px] font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-xs">{p.name}</button>
+                      }} className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-[11px] font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-xs">{p.name}</button>
                     ))}
                   </div>
                 </div>
 
-                {/* Fast Parser Entry Box */}
+                {/* Fast Parser Entry Box with ONLY 1 Print Button Beside */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs relative flex-shrink-0">
-                  <form onSubmit={handleParserSubmit}>
+                  <form onSubmit={handleParserSubmit} className="flex gap-1.5 items-center">
                     <input 
                       ref={parserRef} 
                       type="text" 
                       autoComplete="off"
                       autoCorrect="off"
                       spellCheck="false"
-                      placeholder="Fast Draft e.g. 12 sehra 40n" 
+                      placeholder="Fast Draft e.g. 12 sehra 40n or 120n" 
                       value={parserInput} 
                       onChange={e => setParserInput(e.target.value)} 
-                      className="w-full px-3 py-2 h-11 text-xs bg-stone-50 border-2 border-stone-800 rounded-lg font-mono font-black focus:outline-none focus:bg-white text-stone-900"
+                      className="flex-grow px-3 py-2 h-11 text-xs bg-stone-50 border-2 border-stone-800 rounded-lg font-mono font-black focus:outline-none focus:bg-white text-stone-900"
                     />
+                    <button 
+                      type="button" 
+                      onClick={handleGenerateAndPrintBill}
+                      disabled={baggedItems.length === 0}
+                      className={`h-11 px-3.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-all ${baggedItems.length > 0 ? 'bg-stone-900 hover:bg-black text-white' : 'bg-stone-200 text-stone-400 cursor-not-allowed'}`}
+                    >
+                      <i className="fa-solid fa-print"></i> Print
+                    </button>
                   </form>
                   {suggestionsLocal.length > 0 && (
-                    <div className="absolute left-1 right-1 top-full mt-1 max-h-36 overflow-y-auto bg-white/95 backdrop-blur-md border border-stone-300 shadow-xl rounded-lg z-50 divide-y divide-stone-100">
+                    <div className="absolute left-1 right-20 top-full mt-1 max-h-36 overflow-y-auto bg-white/95 backdrop-blur-md border border-stone-300 shadow-xl rounded-lg z-50 divide-y divide-stone-100">
                       {suggestionsLocal.map(p => (
                         <div key={p.id} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-stone-100 text-stone-900 cursor-pointer">{p.name}</div>
                       ))}
@@ -1060,113 +1137,112 @@
                   )}
                 </div>
 
-                {/* BAGGED ITEMS LIST DIRECTLY BELOW INPUT BOX */}
+                {/* BAGGED ITEMS LIST: GROUPED BY ITEM NAME FIRST, WITH COMBINED LESS */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2.5 pr-0.5 min-h-0 flex-1">
                   
                   {baggedItems.length === 0 ? (
                     <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border border-dashed shadow-xs">
-                      Bag is empty. Enter items above (e.g. <span className="font-mono text-stone-600">5 chura 120no</span>) & press Enter.
+                      Bag is empty. Enter items above (e.g. <span className="font-mono text-stone-600">5 chura 120no</span> or <span className="font-mono text-stone-600">120n</span>) & press Enter.
                     </div>
                   ) : (
                     <>
-                      {/* Bulk Global Discount Input */}
-                      <div className="bg-white p-2 rounded-xl border border-stone-200 shadow-xs flex items-center gap-1.5 flex-shrink-0">
-                        <input 
-                          type="number"
-                          placeholder="Global Less for ALL (e.g. ₹10)..."
-                          value={globalBagLess}
-                          onChange={(e) => setGlobalBagLess(e.target.value)}
-                          className="w-full px-2.5 py-1 h-8 text-xs bg-stone-50 border rounded-lg font-bold focus:outline-none font-mono"
-                        />
-                        <button 
-                          type="button"
-                          onClick={() => applyGlobalBagLessDiscount(globalBagLess)}
-                          className="px-3 py-1 h-8 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded-lg text-[10px] uppercase tracking-wider transition-colors shadow-xs whitespace-nowrap"
-                        >
-                          Apply All
-                        </button>
-                      </div>
-
-                      {/* GROUPED PRODUCT LISTINGS WITH GROUP LESS */}
+                      {/* GROUPED BAGGED ITEMS */}
                       {groupedBaggedItems.map(group => (
-                        <div key={group.key} className="bg-white border rounded-xl p-2 space-y-1.5 shadow-xs animate-slide-up">
+                        <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-2 space-y-2 shadow-xs animate-slide-up">
                           
-                          {/* Group Header with Group Less Application */}
-                          <div className="flex items-center justify-between bg-stone-100 px-2 py-1.5 rounded-lg border border-stone-200">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="font-extrabold text-xs uppercase text-stone-900 truncate">{group.displayName}</span>
-                              <span className="text-[10px] bg-stone-800 text-white font-mono font-bold px-1.5 py-0.5 rounded-full">Qty: {group.totalQty}</span>
+                          {/* Group Header: Group Item Name FIRST, Total Qty, and Combined Less Option */}
+                          <div className="bg-stone-900 text-white p-2 rounded-lg flex flex-col gap-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="font-black text-sm uppercase tracking-wider">{group.displayName}</span>
+                              <span className="text-xs bg-amber-400 text-stone-950 font-mono font-black px-2 py-0.5 rounded-md">
+                                Total Qty: {group.totalQty}
+                              </span>
                             </div>
 
-                            {/* Group Less Form */}
-                            <div className="flex items-center gap-1">
-                              <span className="text-[9px] font-black text-stone-500 uppercase">Group Less:</span>
-                              <input 
-                                type="number" 
-                                placeholder="₹ Less" 
-                                value={groupLessInputs[group.key] || ""} 
-                                onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
-                                className="w-14 px-1 py-0.5 h-6 text-[10px] bg-white border border-stone-300 rounded font-mono font-bold text-center focus:outline-none"
-                              />
-                              <button 
-                                type="button" 
-                                onClick={() => applyGroupLessDiscount(group.key, groupLessInputs[group.key] || "0")} 
-                                className="px-2 py-0.5 h-6 bg-stone-900 text-white text-[9px] font-bold uppercase rounded hover:bg-stone-800"
-                              >
-                                Set
-                              </button>
+                            {/* Combined Less Option for all items of this group */}
+                            <div className="flex items-center justify-between bg-stone-800 p-1.5 rounded border border-stone-700 text-xs">
+                              <span className="text-[10px] font-extrabold uppercase text-amber-300">Group Less Deduction:</span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-amber-400 font-bold">₹</span>
+                                <input 
+                                  type="number" 
+                                  placeholder="Less" 
+                                  value={groupLessInputs[group.key] || ""} 
+                                  onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
+                                  className="w-16 px-1.5 py-0.5 text-xs text-stone-950 bg-white border rounded font-mono font-bold text-center focus:outline-none"
+                                />
+                                <button 
+                                  type="button" 
+                                  onClick={() => applyGroupLessDiscount(group.key, groupLessInputs[group.key] || "0")} 
+                                  className="px-2.5 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[10px] font-black uppercase rounded shadow-xs"
+                                >
+                                  Apply
+                                </button>
+                              </div>
                             </div>
                           </div>
 
-                          {/* Individual Item Lines in Group: Single-line layout [Qty & Code | Price | Less | Amount] */}
-                          <div className="space-y-1 divide-y divide-stone-100">
+                          {/* Items Under This Group Header - Clear and High Visibility */}
+                          <div className="space-y-1.5 divide-y divide-stone-100">
                             {group.items.map(item => (
-                              <div key={item.id} className="pt-1 flex items-center gap-1 text-xs font-mono">
+                              <div key={item.id} className="pt-1.5 flex flex-col gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200">
                                 
-                                {/* Combined Qty & Code Input */}
-                                <div className="flex items-center bg-stone-50 border rounded px-1 py-0.5 gap-0.5 w-28 flex-shrink-0">
-                                  <input 
-                                    type="number" 
-                                    value={item.qty} 
-                                    onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
-                                    className="w-8 text-center font-black bg-transparent focus:outline-none"
-                                  />
-                                  <span className="text-stone-300">|</span>
-                                  <input 
-                                    type="text" 
-                                    placeholder="Code"
-                                    value={item.code === "—" ? "" : item.code} 
-                                    onChange={e => handleEditBaggedItem(item.id, 'code', e.target.value)} 
-                                    className="w-14 text-center font-bold text-indigo-700 bg-transparent focus:outline-none uppercase"
-                                  />
+                                <div className="flex items-center justify-between font-sans">
+                                  <span className="font-bold text-stone-800 uppercase">{item.name}</span>
+                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-400 hover:text-rose-600 px-1 text-sm">
+                                    <i className="fa-solid fa-xmark"></i>
+                                  </button>
                                 </div>
 
-                                {/* Base Price */}
-                                <input 
-                                  type="number" 
-                                  value={Math.round(item.basePrice)} 
-                                  onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
-                                  className="w-12 text-center border h-7 bg-stone-50 rounded font-bold focus:outline-none text-stone-800"
-                                />
+                                {/* Detailed Clear Row showing Qty, Code, Price, Less, Final Amount */}
+                                <div className="flex items-center gap-1 text-stone-900 font-mono">
+                                  <div className="flex items-center gap-0.5 bg-white border px-1 py-0.5 rounded">
+                                    <span className="text-[8px] font-black text-stone-400 uppercase">Q:</span>
+                                    <input 
+                                      type="number" 
+                                      value={item.qty} 
+                                      onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
+                                      className="w-8 text-center font-black bg-transparent focus:outline-none"
+                                    />
+                                  </div>
 
-                                {/* Less Deduction */}
-                                <input 
-                                  type="text" 
-                                  placeholder="Less" 
-                                  value={item.less === "—" ? "" : item.less} 
-                                  onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
-                                  className="w-12 text-center border h-7 bg-rose-50 border-rose-200 rounded font-bold text-rose-700 focus:outline-none"
-                                />
+                                  <div className="flex items-center gap-0.5 bg-white border px-1 py-0.5 rounded">
+                                    <span className="text-[8px] font-black text-stone-400 uppercase">C:</span>
+                                    <input 
+                                      type="text" 
+                                      placeholder="Code"
+                                      value={item.code === "—" ? "" : item.code} 
+                                      onChange={e => handleEditBaggedItem(item.id, 'code', e.target.value)} 
+                                      className="w-12 text-center font-bold text-indigo-700 bg-transparent focus:outline-none uppercase"
+                                    />
+                                  </div>
 
-                                {/* Row Total Amount */}
-                                <div className="flex-grow text-right font-black text-stone-900 pr-1">
-                                  ₹{Math.round(item.totalAmount)}
+                                  <div className="flex items-center gap-0.5 bg-white border px-1 py-0.5 rounded">
+                                    <span className="text-[8px] font-black text-stone-400 uppercase">P:</span>
+                                    <input 
+                                      type="number" 
+                                      value={Math.round(item.basePrice)} 
+                                      onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
+                                      className="w-10 text-center font-bold text-stone-800 bg-transparent focus:outline-none"
+                                    />
+                                  </div>
+
+                                  <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-200 px-1 py-0.5 rounded">
+                                    <span className="text-[8px] font-black text-rose-400 uppercase">L:</span>
+                                    <input 
+                                      type="text" 
+                                      placeholder="0" 
+                                      value={item.less === "—" ? "" : item.less} 
+                                      onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
+                                      className="w-8 text-center font-bold text-rose-700 bg-transparent focus:outline-none"
+                                    />
+                                  </div>
+
+                                  <div className="flex-grow text-right font-black text-stone-900 text-xs pr-0.5">
+                                    ₹{Math.round(item.totalAmount)}
+                                  </div>
                                 </div>
 
-                                {/* Delete Item */}
-                                <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-300 hover:text-rose-600 px-1 text-sm">
-                                  <i className="fa-solid fa-xmark"></i>
-                                </button>
                               </div>
                             ))}
                           </div>
@@ -1241,16 +1317,6 @@
                   )}
 
                 </div>
-
-                {/* Print Action Bottom Bar */}
-                {baggedItems.length > 0 && (
-                  <div className="pt-1 space-y-1 no-print flex-shrink-0">
-                    <button type="button" onClick={handleGenerateAndPrintBill} className="w-full py-3 bg-stone-900 hover:bg-black text-white rounded-xl text-xs uppercase tracking-wider font-black flex justify-center items-center gap-2 h-11 shadow-md">
-                      <i className="fa-solid fa-print text-sm"></i> Print Bill Now
-                    </button>
-                    <button type="button" onClick={() => sharePDFReceipt(baggedItems, customerName, customerCity, billDate)} className="w-full py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold uppercase tracking-wider flex justify-center items-center gap-1 h-8"><i className="fa-solid fa-share-nodes"></i> Share PDF Receipt</button>
-                  </div>
-                )}
               </div>
             )}
 
@@ -1291,7 +1357,7 @@
                       />
                       {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
                         <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 mt-1">
-                          {sortedProductsLocal
+                          {topBilledProducts
                             .filter(p => p.id !== selectedCatalogProduct.id && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
                             .slice(0, 5)
                             .map(p => (
@@ -1317,7 +1383,7 @@
                           triggerNotification("Please select/search a target product.");
                           return;
                         }
-                        const targetItem = sortedProductsLocal.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
+                        const targetItem = topBilledProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
                         if (!targetItem) {
                           triggerNotification("Target product must exist in catalog.");
                           return;
@@ -1344,7 +1410,7 @@
 
                 {/* Filter Product Catalog */}
                 <div className="bg-white p-2 border rounded-xl space-y-1 shadow-xs">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog</span>
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
                   <input 
                     type="text" 
                     placeholder="Filter products list..." 
@@ -1356,7 +1422,7 @@
 
                 {/* Catalog List */}
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs">
-                  {sortedProductsLocal
+                  {topBilledProducts
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
                     .map(p => (
                       <div 
@@ -1391,50 +1457,70 @@
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 
-                {/* DATE RANGE REPORT GENERATOR */}
-                <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
-                  <div className="flex justify-between items-center border-b pb-1">
-                    <span className="text-[10px] font-black uppercase text-stone-500">Date Range Ledger Report</span>
-                    <span className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 rounded">Excludes Walk-In</span>
+                {/* Passcode Security Prompt */}
+                {!isVerified ? (
+                  <div className="bg-white border rounded-xl p-6 text-center space-y-3 shadow-xs">
+                    <i className="fa-solid fa-lock text-3xl text-stone-400"></i>
+                    <p className="text-xs font-bold text-stone-700">Enter passcode to view full historic ledger & reports.</p>
+                    <input 
+                      type="password" 
+                      placeholder="Passcode..." 
+                      value={passwordInput}
+                      onChange={(e) => {
+                        setPasswordInput(e.target.value);
+                        if (e.target.value === "ab") setIsVerified(true);
+                      }}
+                      className="w-32 text-center p-2 border-2 border-stone-800 rounded-lg text-sm font-mono focus:outline-none font-bold bg-stone-50 mx-auto block"
+                    />
                   </div>
-
-                  <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
-                    {["today", "last7", "last30", "custom"].map(preset => (
-                      <button 
-                        key={preset}
-                        type="button"
-                        onClick={() => setReportPreset(preset)}
-                        className={`py-1 rounded text-center uppercase border transition-all ${reportPreset === preset ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}
-                      >
-                        {preset}
-                      </button>
-                    ))}
-                  </div>
-
-                  {reportPreset === "custom" && (
-                    <div className="grid grid-cols-2 gap-1.5 pt-1">
-                      <div>
-                        <span className="text-[8px] font-black text-stone-400 uppercase">From:</span>
-                        <input type="date" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
+                ) : (
+                  <>
+                    {/* DATE RANGE REPORT GENERATOR (ONLY APPEARS AFTER PASSCODE VERIFICATION) */}
+                    <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
+                      <div className="flex justify-between items-center border-b pb-1">
+                        <span className="text-[10px] font-black uppercase text-stone-500">Date Range Ledger Report</span>
+                        <span className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 rounded">Excludes Walk-In</span>
                       </div>
-                      <div>
-                        <span className="text-[8px] font-black text-stone-400 uppercase">To:</span>
-                        <input type="date" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
+
+                      <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
+                        {["today", "last7", "last30", "custom"].map(preset => (
+                          <button 
+                            key={preset}
+                            type="button"
+                            onClick={() => setReportPreset(preset)}
+                            className={`py-1 rounded text-center uppercase border transition-all ${reportPreset === preset ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+
+                      {reportPreset === "custom" && (
+                        <div className="grid grid-cols-2 gap-1.5 pt-1">
+                          <div>
+                            <span className="text-[8px] font-black text-stone-400 uppercase">From:</span>
+                            <input type="date" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
+                          </div>
+                          <div>
+                            <span className="text-[8px] font-black text-stone-400 uppercase">To:</span>
+                            <input type="date" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex justify-between items-center pt-1 border-t">
+                        <span className="text-xs font-bold text-stone-800">Valid Bills: <span className="font-mono text-amber-600 font-black">{filteredReportBills.length}</span></span>
+                        <button 
+                          type="button" 
+                          onClick={handlePrintDateRangeReport} 
+                          className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded text-xs uppercase flex items-center gap-1 shadow-xs"
+                        >
+                          <i className="fa-solid fa-print"></i> Print Report
+                        </button>
                       </div>
                     </div>
-                  )}
-
-                  <div className="flex justify-between items-center pt-1 border-t">
-                    <span className="text-xs font-bold text-stone-800">Valid Bills: <span className="font-mono text-amber-600 font-black">{filteredReportBills.length}</span></span>
-                    <button 
-                      type="button" 
-                      onClick={handlePrintDateRangeReport} 
-                      className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded text-xs uppercase flex items-center gap-1 shadow-xs"
-                    >
-                      <i className="fa-solid fa-print"></i> Print Report
-                    </button>
-                  </div>
-                </div>
+                  </>
+                )}
 
                 {/* RECENT HISTORIC BILL LOGS (Sorted Recent First) */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0 flex-1">
@@ -1470,10 +1556,10 @@
                             </button>
                             <button 
                               type="button" 
-                              onClick={() => sharePDFReceipt(b.items || [], b.customerName, b.customerCity, b.date)} 
+                              onClick={() => shareBillImage(b.items || [], b.customerName, b.customerCity, b.date)} 
                               className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 border rounded text-[9px] uppercase font-bold"
                             >
-                              Share
+                              Share Image
                             </button>
                             <button 
                               type="button" 
@@ -1525,21 +1611,102 @@
                       </div>
                     ))}
                   </div>
+                </div>
+              </div>
+            )}
 
-                  {!isVerified && (
-                    <div className="pt-2 text-center">
-                      <input 
-                        type="password" 
-                        placeholder="Passcode..." 
-                        value={passwordInput}
-                        onChange={(e) => {
-                          setPasswordInput(e.target.value);
-                          if (e.target.value === "ab") setIsVerified(true);
-                        }}
-                        className="w-24 text-center p-1 border rounded-lg text-xs font-mono focus:outline-none font-bold bg-white"
-                      />
+            {/* PRINT SETTINGS TAB */}
+            {currentTab === "settings" && (
+              <div className="flex-grow p-2 bg-stone-50 overflow-y-auto custom-scroll space-y-3">
+                <div className="bg-white p-3 border rounded-xl shadow-xs space-y-3">
+                  <h3 className="text-xs font-black uppercase text-stone-800 border-b pb-1.5 flex items-center gap-1.5">
+                    <i className="fa-solid fa-sliders text-amber-500"></i> Printer & Receipt Settings
+                  </h3>
+
+                  {/* Field Visibility Options */}
+                  <div className="space-y-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Header Field Visibility</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showName} onChange={e => setPrintSettings({ ...printSettings, showName: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Customer Name</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showCity} onChange={e => setPrintSettings({ ...printSettings, showCity: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Customer City</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showDate} onChange={e => setPrintSettings({ ...printSettings, showDate: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Invoice Date</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showTime} onChange={e => setPrintSettings({ ...printSettings, showTime: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Invoice Time</span>
+                      </label>
                     </div>
-                  )}
+                  </div>
+
+                  {/* Font Options */}
+                  <div className="space-y-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Typography Settings</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Font Family</span>
+                        <select 
+                          value={printSettings.fontFamily} 
+                          onChange={e => setPrintSettings({ ...printSettings, fontFamily: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50"
+                        >
+                          <option value="Courier Prime">Courier Prime (Monospace)</option>
+                          <option value="Roboto Mono">Roboto Mono</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Base Font Size (px)</span>
+                        <input 
+                          type="number" 
+                          value={printSettings.fontSize} 
+                          onChange={e => setPrintSettings({ ...printSettings, fontSize: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50" 
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Spacing Controls */}
+                  <div className="space-y-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Table Row & Column Spacing</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Row Vertical Padding (px)</span>
+                        <input 
+                          type="number" 
+                          value={printSettings.rowSpacing} 
+                          onChange={e => setPrintSettings({ ...printSettings, rowSpacing: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50" 
+                        />
+                      </div>
+
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Column Horizontal Padding (px)</span>
+                        <input 
+                          type="number" 
+                          value={printSettings.colSpacing} 
+                          onChange={e => setPrintSettings({ ...printSettings, colSpacing: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50" 
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    type="button" 
+                    onClick={() => triggerNotification("✓ Print settings saved!")} 
+                    className="w-full py-2.5 bg-stone-900 text-white font-bold rounded-lg text-xs uppercase tracking-wider shadow-xs"
+                  >
+                    Save Settings
+                  </button>
                 </div>
               </div>
             )}
@@ -1553,7 +1720,7 @@
               <button 
                 type="button" 
                 onClick={() => setCurrentTab("bill")} 
-                className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all relative ${currentTab === "bill" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
+                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all relative ${currentTab === "bill" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
               >
                 <i className="fa-solid fa-receipt text-lg"></i>
                 <span className="text-[10px] font-black uppercase tracking-wider">Fast Draft</span>
@@ -1563,7 +1730,7 @@
               <button 
                 type="button" 
                 onClick={() => setCurrentTab("products")} 
-                className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
+                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
               >
                 <i className="fa-solid fa-box-open text-lg"></i>
                 <span className="text-[10px] font-black uppercase tracking-wider">Products</span>
@@ -1572,10 +1739,19 @@
               <button 
                 type="button" 
                 onClick={() => setCurrentTab("logs")} 
-                className={`flex flex-col items-center gap-1 py-1 px-4 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
+                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
               >
                 <i className="fa-solid fa-clock-rotate-left text-lg"></i>
                 <span className="text-[10px] font-black uppercase tracking-wider">Historic</span>
+              </button>
+
+              <button 
+                type="button" 
+                onClick={() => setCurrentTab("settings")} 
+                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${currentTab === "settings" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
+              >
+                <i className="fa-solid fa-gear text-lg"></i>
+                <span className="text-[10px] font-black uppercase tracking-wider">Settings</span>
               </button>
 
             </div>
