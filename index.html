@@ -154,7 +154,7 @@
       }
     };
 
-    // Persistent deleted bill IDs filter to prevent re-appearance during cloud sync
+    // Persistent deleted bill IDs filter
     const getDeletedBillIds = () => {
       try {
         return JSON.parse(localStorage.getItem("deletedBillIds") || "[]");
@@ -404,7 +404,7 @@
       const [customerCity, setCustomerCity] = useState("");
       const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
       
-      // REQUIREMENT NO. 1: Default fill X% discount as 15
+      // Default X% discount = 15
       const [discountX, setDiscountX] = useState("15"); 
 
       const [baggedItems, setBaggedItems] = useState([]);
@@ -441,7 +441,7 @@
       const [lastBalanceAmount, setLastBalanceAmount] = useState(0);
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
 
-      // Printable & App Settings State (Persisted in localStorage)
+      // Printable & App Settings State
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
@@ -739,7 +739,7 @@
         const day = String(baseDate.getDate()).padStart(2, '0');
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         
-        const datePart = `${day},${months[baseDate.getMonth()]}`;
+        const datePart = `${day}, ${months[baseDate.getMonth()]}`;
         const timePart = `${String(baseDate.getHours()).padStart(2, '0')}:${String(baseDate.getMinutes()).padStart(2, '0')}`;
 
         if (printSettings.showDate && printSettings.showTime) return `${datePart} ${timePart}`;
@@ -778,7 +778,7 @@
         }, 100);
       };
 
-      // FIXED LOAD HISTORICAL BILL (Loads customer city, items, and details correctly)
+      // Load Historical Bill
       const handleLoadHistoricalBill = (historicalBillObj) => {
         const loadedCustName = historicalBillObj.customerName || historicalBillObj.name || "";
         const loadedCity = historicalBillObj.customerCity || 
@@ -888,7 +888,6 @@
       }, [parserInput, mostTypedProducts, printSettings.enableInlineAutocomplete]);
 
       // FAST PARSER SUBMIT
-      // REQUIREMENT NO. 3: Item-level default less is 0
       const handleParserSubmit = (e) => {
         e.preventDefault();
         let rawInput = parserInput.trim();
@@ -1011,7 +1010,7 @@
         }));
       };
 
-      // REQUIREMENT NO. 2: Group Less input default 10 (Not applied automatically until APPLY is clicked)
+      // Group Less Handler - Default fill 10
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
         const valToApply = lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10";
         const amt = parseFloat(valToApply) || 0;
@@ -1059,20 +1058,21 @@
         return Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0));
       }, [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // Renders receipts for printer/spool with 4-letter city code
+      // Renders receipts with DATE & TIME formatted on separate next lines
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = sortedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
-
-        const headerDetails = [];
-        if (printSettings.showName && custName) headerDetails.push(getThreeLetterCode(custName));
-        if (printSettings.showCity && cityVal) headerDetails.push(`(${getCityCode(cityVal)})`);
-        if (dateTimeStr) headerDetails.push(`- ${dateTimeStr}`);
 
         const fontFamCss = printSettings.fontFamily === 'Roboto Mono' ? "'Roboto Mono', monospace" : "'Courier Prime', monospace";
         const fSizePx = `${printSettings.fontSize}px`;
         const rPadPx = `${printSettings.rowSpacing}px`;
         const cPadPx = `${printSettings.colSpacing}px`;
+
+        const nameStr = (printSettings.showName && custName) ? getThreeLetterCode(custName) : "";
+        const cityStr = (printSettings.showCity && cityVal) ? `(${getCityCode(cityVal)})` : "";
+        const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" ");
+
+        const dateStrFormatted = formatInvoiceDateTime(billDate);
 
         const footerLines = (printSettings.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
 
@@ -1080,9 +1080,10 @@
           <div style="font-family: ${fontFamCss};" class="text-center pb-3 mb-3 border-b-4 border-black">
             <h2 style="font-size: ${Math.round(parseInt(printSettings.fontSize)*1.4)}px;" class="font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
             <p style="font-size: ${Math.round(parseInt(printSettings.fontSize)*0.8)}px;" class="font-bold mt-1">Rough Statement Profile</p>
-            ${headerDetails.length > 0 ? `
-              <div style="font-size: ${fSizePx};" class="mt-2 text-center font-black border-y-2 border-dashed border-black py-1.5">
-                ${headerDetails.join(" ")}
+            ${(nameCityLine || dateStrFormatted) ? `
+              <div style="font-size: ${fSizePx};" class="mt-2 text-center font-black border-y-2 border-dashed border-black py-1.5 space-y-0.5">
+                ${nameCityLine ? `<div>${nameCityLine}</div>` : ""}
+                ${dateStrFormatted ? `<div>${dateStrFormatted}</div>` : ""}
               </div>
             ` : ""}
           </div>
@@ -1390,7 +1391,7 @@
         }
       };
 
-      // Thermal BLE Print Generator with 4-letter city code
+      // Thermal BLE Print Generator with Date & Time on Next Line
       const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
         if (!bleCharacteristic) return;
         const encoder = new TextEncoder();
@@ -1400,11 +1401,18 @@
         esc.push(0x1B, 0x61, 0x01); // Center
         esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
         
-        const headerText = [];
-        if (printSettings.showName && custName) headerText.push(custName.toUpperCase());
-        if (printSettings.showCity && cityVal) headerText.push(`(${getCityCode(cityVal)})`);
-        if (activeDate) headerText.push(activeDate);
-        if (headerText.length > 0) esc.push(...encoder.encode(`${headerText.join(" - ")}\n`));
+        const nameStr = (printSettings.showName && custName) ? custName.toUpperCase() : "";
+        const cityStr = (printSettings.showCity && cityVal) ? `(${getCityCode(cityVal)})` : "";
+        const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" - ");
+
+        if (nameCityLine) {
+          esc.push(...encoder.encode(`${nameCityLine}\n`));
+        }
+        
+        // Date & Time on Next Line
+        if (activeDate) {
+          esc.push(...encoder.encode(`${activeDate}\n`));
+        }
         
         esc.push(...encoder.encode("--------------------------------\n"));
         
@@ -1497,7 +1505,6 @@
         });
       }, [cloudBills, reportPreset, reportStartDate, reportEndDate]);
 
-      // FIXED PRINT DATE RANGE REPORT WITH RELIABLE RENDER TIMEOUT
       const handlePrintDateRangeReport = () => {
         if (!isVerified) {
           triggerNotification("Passcode required to print ledger report!");
@@ -1705,7 +1712,7 @@
                 className="w-14 px-1 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold uppercase"
               />
               
-              {/* REQUIREMENT NO. 1: Default fill X% as 15 */}
+              {/* Default fill X% as 15 */}
               <div className="flex items-center gap-0.5">
                 <span className="text-[8px] text-stone-400 font-black">X%:</span>
                 <input 
@@ -1817,13 +1824,12 @@
                     <>
                       {/* GROUPED BAGGED ITEMS */}
                       {groupedBaggedItems.map(group => {
-                        // REQUIREMENT NO. 2: Default fill group less with 10 (not applied automatically until APPLY is clicked)
                         const defaultGroupLessVal = groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "10";
 
                         return (
                           <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-1.5 space-y-1.5 shadow-xs animate-slide-up">
                             
-                            {/* Single-Line Group Header: [ITEM NAME] [Total Qty] [LESS: 10] [APPLY] */}
+                            {/* Single-Line Group Header */}
                             <div className="bg-stone-900 text-white px-2 py-1.5 rounded-lg flex items-center justify-between gap-1 text-xs shadow-xs">
                               <div className="flex items-center gap-1.5 min-w-0 flex-shrink truncate">
                                 <span className="font-black text-xs uppercase tracking-wider text-amber-300 truncate">{group.displayName}</span>
@@ -1853,52 +1859,54 @@
                               </div>
                             </div>
 
-                            {/* Touch-Friendly Child Item Rows */}
-                            {/* REQUIREMENT NO. 3: Item-level default Less is 0 */}
+                            {/* Touch-Friendly Child Item Rows (STRICT 1-LINE NON-WRAPPING LAYOUT) */}
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
-                                <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200">
+                                <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200 flex-nowrap overflow-hidden">
                                   
-                                  <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap font-mono flex-grow min-w-0">
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1.5 py-1 rounded h-9">
-                                      <span className="text-[9px] font-black text-stone-400 uppercase">Q:</span>
+                                  <div className="flex items-center gap-1 font-mono flex-nowrap flex-grow min-w-0">
+                                    {/* Qty Box */}
+                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
+                                      <span className="text-[8px] font-black text-stone-400 uppercase">Q:</span>
                                       <input 
                                         type="number" 
                                         inputMode="decimal"
                                         value={item.qty} 
                                         onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
-                                        className="w-8 text-center font-black bg-transparent focus:outline-none text-xs"
+                                        className="w-7 text-center font-black bg-transparent focus:outline-none text-xs"
                                       />
                                     </div>
 
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1.5 py-1 rounded h-9">
-                                      <span className="text-[9px] font-black text-stone-400 uppercase">C:</span>
+                                    {/* Code Box */}
+                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
+                                      <span className="text-[8px] font-black text-stone-400 uppercase">C:</span>
                                       <input 
                                         type="text" 
-                                        placeholder="Code"
+                                        placeholder="CODE"
                                         value={item.code === "—" ? "" : item.code} 
                                         onChange={e => handleEditBaggedItem(item.id, 'code', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
-                                        className="w-12 text-center font-bold text-indigo-700 bg-transparent focus:outline-none uppercase text-xs"
+                                        className="w-11 text-center font-bold text-indigo-700 bg-transparent focus:outline-none uppercase text-xs"
                                       />
                                     </div>
 
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1.5 py-1 rounded h-9">
-                                      <span className="text-[9px] font-black text-stone-400 uppercase">P:</span>
+                                    {/* Price Box */}
+                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
+                                      <span className="text-[8px] font-black text-stone-400 uppercase">P:</span>
                                       <input 
                                         type="number" 
                                         inputMode="decimal"
                                         value={Math.round(item.basePrice)} 
                                         onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
-                                        className="w-12 text-center font-bold text-stone-800 bg-transparent focus:outline-none text-xs"
+                                        className="w-10 text-center font-bold text-stone-800 bg-transparent focus:outline-none text-xs"
                                       />
                                     </div>
 
-                                    {/* Default Item Less = 0 */}
-                                    <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1.5 py-1 rounded h-9">
-                                      <span className="text-[9px] font-black text-rose-500 uppercase">L:</span>
+                                    {/* Less Box (Default 0) */}
+                                    <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
+                                      <span className="text-[8px] font-black text-rose-500 uppercase">L:</span>
                                       <input 
                                         type="text" 
                                         inputMode="decimal"
@@ -1906,16 +1914,18 @@
                                         value={item.less === "—" ? "" : item.less} 
                                         onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
-                                        className="w-9 text-center font-bold text-rose-700 bg-transparent focus:outline-none text-xs"
+                                        className="w-7 text-center font-bold text-rose-700 bg-transparent focus:outline-none text-xs"
                                       />
                                     </div>
 
-                                    <div className="flex-grow text-right font-black text-stone-900 text-xs pr-1">
+                                    {/* Amount - STRICTLY ON SAME LINE */}
+                                    <div className="flex-grow text-right font-black text-stone-900 text-xs whitespace-nowrap pl-0.5">
                                       ₹{Math.round(getItemTotalAmount(item))}
                                     </div>
                                   </div>
 
-                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1.5 text-base flex-shrink-0 h-9 flex items-center justify-center">
+                                  {/* Delete button on same line */}
+                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1 text-sm flex-shrink-0 h-8 flex items-center justify-center">
                                     <i className="fa-solid fa-xmark"></i>
                                   </button>
 
