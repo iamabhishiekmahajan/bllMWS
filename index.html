@@ -269,13 +269,12 @@
       customers: [],
       
       saveBillToCloudWithNumericId: async (numericId, bill, isEdit, targetUrl = DEFAULT_SCRIPT_URL) => {
-        // Clean and simplify items array before sending
         const cleanItems = (bill.items || []).map(item => ({
           qty: parseFloat(item.qty) || 1,
           name: item.name || "Item",
           code: (item.code && item.code !== "—") ? item.code : "",
           basePrice: parseFloat(item.basePrice || item.rate || item.price || 0),
-          less: String(item.less !== undefined && item.less !== null ? item.less : "10"),
+          less: String(item.less !== undefined && item.less !== null ? item.less : "0"),
           finalUnitPrice: parseFloat(item.finalUnitPrice || 0),
           totalAmount: getItemTotalAmount(item)
         }));
@@ -385,7 +384,10 @@
       const [customerName, setCustomerName] = useState("");
       const [customerCity, setCustomerCity] = useState("");
       const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
-      const [discountX, setDiscountX] = useState("0"); 
+      
+      // REQUIREMENT NO. 1: Default fill X% discount as 15
+      const [discountX, setDiscountX] = useState("15"); 
+
       const [baggedItems, setBaggedItems] = useState([]);
       const [dbCustomers, setDbCustomers] = useState([]);
       const [cloudProducts, setCloudProducts] = useState([]);
@@ -419,7 +421,7 @@
       const [lastBalanceAmount, setLastBalanceAmount] = useState(0);
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
 
-      // Printable & App Settings State (Persisted in localStorage)
+      // Printable & App Settings State
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
@@ -466,7 +468,6 @@
       const getNormalizedKey = (str) => str ? str.toLowerCase().trim().replace(/\s+/g, ' ') : "";
       const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
-      // Fetch customer's last remaining balance in background
       const fetchLastBalanceInBackground = (nameVal) => {
         if (!nameVal || nameVal.trim() === "") {
           setLastBalanceAmount(0);
@@ -510,7 +511,6 @@
         }
       }, [includeLastBalance, customerName]);
 
-      // Load cached IndexedDB data on mount
       useEffect(() => {
         const loadIDBCache = async () => {
           const cachedBills = await idbStorage.getAllBills();
@@ -534,7 +534,6 @@
         loadIDBCache();
       }, []);
 
-      // Connectivity Listeners
       useEffect(() => {
         const handleOnline = () => {
           setIsOnline(true);
@@ -615,7 +614,6 @@
             }
 
             if (data.txns) {
-              // MERGE REMOTE DATA WITH LOCAL BILLS SAFELY TO PREVENT DATA TRUNCATION/LOSS
               setCloudBills(prevBills => {
                 const prevMap = new Map();
                 prevBills.forEach(b => prevMap.set(String(b.id), b));
@@ -645,7 +643,6 @@
                   };
                 });
 
-                // Add local bills that haven't reached cloud yet
                 prevBills.forEach(localTxn => {
                   if (!merged.some(m => String(m.id) === String(localTxn.id))) {
                     merged.push(localTxn);
@@ -721,21 +718,21 @@
         if (match) {
           setCustomerName(match.name);
           setCustomerCity(match.city || "");
-          setDiscountX(String(match.discount || 0));
+          setDiscountX(match.discount !== undefined && match.discount !== 0 ? String(match.discount) : "15");
           if (match.balance !== undefined) setLastBalanceAmount(parseFloat(match.balance) || 0);
           setShowCustSuggestions(false);
           if (includeLastBalance) fetchLastBalanceInBackground(match.name);
         } else {
           setCustomerName("");
           setCustomerCity("");
-          setDiscountX("0");
+          setDiscountX("15");
           setLastBalanceAmount(0);
           triggerNotification("Select a valid customer from database.");
         }
       };
 
       const handleResetAll = () => {
-        setCustomerName(""); setCustomerCity(""); setDiscountX("0");
+        setCustomerName(""); setCustomerCity(""); setDiscountX("15");
         setBaggedItems([]); setEditingBillId(null);
         setParserInput("");
         setGroupLessInputs({});
@@ -746,18 +743,18 @@
         }, 100);
       };
 
-      // FULL HISTORICAL BILL LOADING FIX (Retains ALL items & ensures unique string IDs)
+      // Load Historical Bill (Retains default 0 item less if unspecified)
       const handleLoadHistoricalBill = (historicalBillObj) => {
         setCustomerName(historicalBillObj.customerName || historicalBillObj.name || "");
         setCustomerCity(historicalBillObj.customerCity || historicalBillObj.city || "");
-        setDiscountX(String(historicalBillObj.discountRate || historicalBillObj.discount || 0));
+        setDiscountX(String(historicalBillObj.discountRate || historicalBillObj.discount || 15));
         setBillDate(historicalBillObj.date ? historicalBillObj.date.split(' ')[0] : new Date().toISOString().split('T')[0]);
         
         const rawItems = parseItemsSafely(historicalBillObj.items);
         const normalized = rawItems.map((i, idx) => {
           const qtyVal = parseFloat(i.qty) || 1;
           const priceVal = parseFloat(i.basePrice || i.rate || i.price || i.finalUnitPrice || 0);
-          const lessVal = (i.less !== undefined && i.less !== null && i.less !== "—") ? String(i.less) : "10";
+          const lessVal = (i.less !== undefined && i.less !== null && i.less !== "—") ? String(i.less) : "0";
           const deduct = (lessVal !== "—" && !isNaN(parseFloat(lessVal))) ? parseFloat(lessVal) : 0;
           const finalPrice = i.finalUnitPrice !== undefined && !isNaN(parseFloat(i.finalUnitPrice))
             ? parseFloat(i.finalUnitPrice) 
@@ -841,7 +838,8 @@
         return "";
       }, [parserInput, mostTypedProducts, printSettings.enableInlineAutocomplete]);
 
-      // FAST PARSER SUBMIT (DEFAULT PER SKU LESS = 10)
+      // FAST PARSER SUBMIT
+      // REQUIREMENT NO. 3: Item-level default less is 0 (or blank), NO automatic subtraction!
       const handleParserSubmit = (e) => {
         e.preventDefault();
         let rawInput = parserInput.trim();
@@ -917,10 +915,9 @@
           idbStorage.cacheProducts(updatedProds);
         }
 
-        // DEFAULT PER SKU LESS = 10 (No. 2 in requirement)
-        const defaultSkuLess = "10";
-        const deduct = 10;
-        const finalUnitPrice = Math.max(0, unitPrice - deduct);
+        // DEFAULT PER SKU ITEM LESS = 0 (No deduction by default)
+        const defaultSkuLess = "0";
+        const finalUnitPrice = unitPrice; // No automatic subtraction
 
         const newItem = {
           id: 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9), 
@@ -966,9 +963,9 @@
         }));
       };
 
-      // Group Less Handler - Default fill pre-set to 15 (No. 1 in requirement)
+      // REQUIREMENT NO. 2: Group Less input is filled with 10 (Not applied automatically until APPLY is clicked)
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
-        const valToApply = lessValStr !== undefined && lessValStr !== "" ? lessValStr : "15";
+        const valToApply = lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10";
         const amt = parseFloat(valToApply) || 0;
         setBaggedItems(prev => prev.map(item => {
           if (getNormalizedKey(item.name) === groupKey) {
@@ -1344,7 +1341,7 @@
         }
       };
 
-      // Thermal BLE Print Command Generator (Robust Sum Calculations)
+      // Thermal BLE Print Command Generator
       const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
         if (!bleCharacteristic) return;
         const encoder = new TextEncoder();
@@ -1622,13 +1619,15 @@
                 className="w-14 px-1 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold"
               />
               
+              {/* REQUIREMENT NO. 1: Default fill X% as 15 */}
               <div className="flex items-center gap-0.5">
                 <span className="text-[8px] text-stone-400 font-black">X%:</span>
                 <input 
                   type="number" 
-                  placeholder="0" 
+                  placeholder="15" 
                   value={discountX} 
                   onChange={e => setDiscountX(e.target.value)} 
+                  onFocus={(e) => e.target.select()}
                   className="w-8 px-0.5 h-10 text-xs bg-stone-50 border rounded-lg text-center font-mono font-bold focus:outline-none"
                 />
               </div>
@@ -1732,12 +1731,13 @@
                     <>
                       {/* GROUPED BAGGED ITEMS */}
                       {groupedBaggedItems.map(group => {
-                        const defaultGroupLessVal = groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "15";
+                        // REQUIREMENT NO. 2: Default fill group less with 10 (not applied automatically until APPLY is tapped)
+                        const defaultGroupLessVal = groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "10";
 
                         return (
                           <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-1.5 space-y-1.5 shadow-xs animate-slide-up">
                             
-                            {/* Single-Line Group Header: [ITEM NAME] [Total Qty] [Less: Input (No. 1 Default 15)] [Apply] */}
+                            {/* Single-Line Group Header: [ITEM NAME] [Total Qty] [LESS: 10] [APPLY] */}
                             <div className="bg-stone-900 text-white px-2 py-1.5 rounded-lg flex items-center justify-between gap-1 text-xs shadow-xs">
                               <div className="flex items-center gap-1.5 min-w-0 flex-shrink truncate">
                                 <span className="font-black text-xs uppercase tracking-wider text-amber-300 truncate">{group.displayName}</span>
@@ -1751,7 +1751,7 @@
                                 <input 
                                   type="number" 
                                   inputMode="decimal"
-                                  placeholder="15" 
+                                  placeholder="10" 
                                   value={defaultGroupLessVal} 
                                   onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
                                   onFocus={(e) => e.target.select()}
@@ -1767,7 +1767,8 @@
                               </div>
                             </div>
 
-                            {/* Touch-Friendly Child Item Rows (No. 2 Default Less = 10) */}
+                            {/* Touch-Friendly Child Item Rows */}
+                            {/* REQUIREMENT NO. 3: Item-level default Less is 0 (or blank) */}
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
                                 <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200">
@@ -1809,12 +1810,13 @@
                                       />
                                     </div>
 
+                                    {/* Default Item Less = 0 */}
                                     <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1.5 py-1 rounded h-9">
                                       <span className="text-[9px] font-black text-rose-500 uppercase">L:</span>
                                       <input 
                                         type="text" 
                                         inputMode="decimal"
-                                        placeholder="10" 
+                                        placeholder="0" 
                                         value={item.less === "—" ? "" : item.less} 
                                         onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
