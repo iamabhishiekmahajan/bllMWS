@@ -154,6 +154,24 @@
       }
     };
 
+    // Persistent deleted bill IDs filter to prevent re-appearance during cloud sync
+    const getDeletedBillIds = () => {
+      try {
+        return JSON.parse(localStorage.getItem("deletedBillIds") || "[]");
+      } catch (e) {
+        return [];
+      }
+    };
+
+    const addDeletedBillId = (id) => {
+      const current = getDeletedBillIds();
+      const strId = String(id);
+      if (!current.includes(strId)) {
+        current.push(strId);
+        localStorage.setItem("deletedBillIds", JSON.stringify(current));
+      }
+    };
+
     // IndexedDB Storage Engine
     const idbStorage = {
       dbPromise: null,
@@ -326,6 +344,7 @@
       },
 
       deleteTxnFromCloud: async (numericId, targetUrl = DEFAULT_SCRIPT_URL) => {
+        addDeletedBillId(numericId);
         await idbStorage.removeBill(numericId);
         const payload = {
           action: 'deleteTxn',
@@ -411,6 +430,7 @@
       const [bleStatus, setBleStatus] = useState("Disconnected");
       const [groupLessInputs, setGroupLessInputs] = useState({});
       const [billToDelete, setBillToDelete] = useState(null);
+      const [showNewBillConfirmModal, setShowNewBillConfirmModal] = useState(false);
 
       // Offline Resilience & Pending Sync
       const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -421,7 +441,7 @@
       const [lastBalanceAmount, setLastBalanceAmount] = useState(0);
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
 
-      // Printable & App Settings State
+      // Printable & App Settings State (Persisted in localStorage)
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
@@ -468,6 +488,14 @@
       const getNormalizedKey = (str) => str ? str.toLowerCase().trim().replace(/\s+/g, ' ') : "";
       const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
+      // Helper for 4-letter city code
+      const getCityCode = (val) => {
+        if (!val) return "LOCA";
+        const cleaned = val.replace(/[^a-zA-Z]/g, "").toUpperCase();
+        return cleaned.slice(0, 4) || "LOCA";
+      };
+
+      // Fetch customer's last remaining balance in background
       const fetchLastBalanceInBackground = (nameVal) => {
         if (!nameVal || nameVal.trim() === "") {
           setLastBalanceAmount(0);
@@ -519,9 +547,11 @@
           const pending = await idbStorage.getPending();
 
           const deletedKeys = getDeletedProductKeys();
+          const deletedBillIds = getDeletedBillIds();
 
           if (cachedBills.length > 0) {
-            const sorted = [...cachedBills].sort((a, b) => (b.id ? Number(b.id) : 0) - (a.id ? Number(a.id) : 0));
+            const validCached = cachedBills.filter(b => b && b.id && !deletedBillIds.includes(String(b.id)));
+            const sorted = validCached.sort((a, b) => (b.id ? Number(b.id) : 0) - (a.id ? Number(a.id) : 0));
             setCloudBills(sorted);
           }
           if (cachedProds.length > 0) {
@@ -586,6 +616,7 @@
         window[callbackName] = (data) => {
           if (data) {
             const deletedKeys = getDeletedProductKeys();
+            const deletedBillIds = getDeletedBillIds();
 
             if (data.customers) {
               let parsedCustomers = [];
@@ -618,7 +649,9 @@
                 const prevMap = new Map();
                 prevBills.forEach(b => prevMap.set(String(b.id), b));
 
-                const merged = data.txns.map(remoteTxn => {
+                const remoteValid = data.txns.filter(b => b && b.id && !deletedBillIds.includes(String(b.id)));
+
+                const merged = remoteValid.map(remoteTxn => {
                   const remoteId = String(remoteTxn.id);
                   const localTxn = prevMap.get(remoteId);
                   const remoteItems = parseItemsSafely(remoteTxn.items);
@@ -626,11 +659,12 @@
                   if (localTxn) {
                     const localItems = parseItemsSafely(localTxn.items);
                     const isRecentlySavedLocally = (Date.now() - (localTxn.localUpdatedAt || 0)) < 30000;
-                    if ((isRecentlySavedLocally || localItems.length > remoteItems.length) && localItems.length > 0) {
+                    if (isRecentlySavedLocally && localItems.length > 0) {
                       return {
                         ...remoteTxn,
                         ...localTxn,
                         items: localItems,
+                        customerCity: localTxn.customerCity || remoteTxn.customerCity || remoteTxn.city || "Local",
                         totalAmount: localTxn.totalAmount || remoteTxn.totalAmount || remoteTxn.amount
                       };
                     }
@@ -638,13 +672,14 @@
 
                   return {
                     ...remoteTxn,
+                    customerCity: remoteTxn.customerCity || remoteTxn.city || "Local",
                     items: remoteItems,
                     totalAmount: remoteTxn.totalAmount || remoteTxn.amount
                   };
                 });
 
                 prevBills.forEach(localTxn => {
-                  if (!merged.some(m => String(m.id) === String(localTxn.id))) {
+                  if (!deletedBillIds.includes(String(localTxn.id)) && !merged.some(m => String(m.id) === String(localTxn.id))) {
                     merged.push(localTxn);
                   }
                 });
@@ -743,10 +778,24 @@
         }, 100);
       };
 
-      // Load Historical Bill (Retains default 0 item less if unspecified)
+      // FIXED LOAD HISTORICAL BILL (Loads customer city, items, and details correctly)
       const handleLoadHistoricalBill = (historicalBillObj) => {
-        setCustomerName(historicalBillObj.customerName || historicalBillObj.name || "");
-        setCustomerCity(historicalBillObj.customerCity || historicalBillObj.city || "");
+        const loadedCustName = historicalBillObj.customerName || historicalBillObj.name || "";
+        const loadedCity = historicalBillObj.customerCity || 
+                           historicalBillObj.city || 
+                           (historicalBillObj.customer && historicalBillObj.customer.city) || "";
+
+        setCustomerName(loadedCustName);
+
+        if (loadedCity) {
+          setCustomerCity(loadedCity);
+        } else if (loadedCustName) {
+          const custMatch = dbCustomers.find(c => c && c.name && getNormalizedKey(c.name) === getNormalizedKey(loadedCustName));
+          setCustomerCity(custMatch ? (custMatch.city || "") : "");
+        } else {
+          setCustomerCity("");
+        }
+
         setDiscountX(String(historicalBillObj.discountRate || historicalBillObj.discount || 15));
         setBillDate(historicalBillObj.date ? historicalBillObj.date.split(' ')[0] : new Date().toISOString().split('T')[0]);
         
@@ -839,7 +888,7 @@
       }, [parserInput, mostTypedProducts, printSettings.enableInlineAutocomplete]);
 
       // FAST PARSER SUBMIT
-      // REQUIREMENT NO. 3: Item-level default less is 0 (or blank), NO automatic subtraction!
+      // REQUIREMENT NO. 3: Item-level default less is 0
       const handleParserSubmit = (e) => {
         e.preventDefault();
         let rawInput = parserInput.trim();
@@ -906,7 +955,6 @@
 
         const displayCasing = toTitleCase(rawProdName);
         
-        // Save unique product to catalog automatically
         const isDuplicateCatalog = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(displayCasing));
         if (!isDuplicateCatalog) {
           window.firebaseBridge.addProductToCloud({ name: displayCasing }, activeScriptUrl);
@@ -915,9 +963,9 @@
           idbStorage.cacheProducts(updatedProds);
         }
 
-        // DEFAULT PER SKU ITEM LESS = 0 (No deduction by default)
+        // DEFAULT PER SKU ITEM LESS = 0
         const defaultSkuLess = "0";
-        const finalUnitPrice = unitPrice; // No automatic subtraction
+        const finalUnitPrice = unitPrice;
 
         const newItem = {
           id: 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9), 
@@ -963,7 +1011,7 @@
         }));
       };
 
-      // REQUIREMENT NO. 2: Group Less input is filled with 10 (Not applied automatically until APPLY is clicked)
+      // REQUIREMENT NO. 2: Group Less input default 10 (Not applied automatically until APPLY is clicked)
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
         const valToApply = lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10";
         const amt = parseFloat(valToApply) || 0;
@@ -1011,14 +1059,14 @@
         return Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0));
       }, [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // Renders receipts for printer/spool
+      // Renders receipts for printer/spool with 4-letter city code
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = sortedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
 
         const headerDetails = [];
         if (printSettings.showName && custName) headerDetails.push(getThreeLetterCode(custName));
-        if (printSettings.showCity && cityVal) headerDetails.push(`(${getThreeLetterCode(cityVal)})`);
+        if (printSettings.showCity && cityVal) headerDetails.push(`(${getCityCode(cityVal)})`);
         if (dateTimeStr) headerDetails.push(`- ${dateTimeStr}`);
 
         const fontFamCss = printSettings.fontFamily === 'Roboto Mono' ? "'Roboto Mono', monospace" : "'Courier Prime', monospace";
@@ -1129,7 +1177,8 @@
         const billDataObject = {
           id: uniqueNumericId, customerName: finalClientName, customerCity: customerCity || "Local",
           date: billDate, items: baggedItems, totalAmount: grandFinalBalance, discountRate: parseFloat(discountX) || 0,
-          timestamp: uniqueNumericId, syncStatusFirestore: true, syncStatusSheets: true, formattedDateTime: printDateFormatted
+          timestamp: uniqueNumericId, syncStatusFirestore: true, syncStatusSheets: true, formattedDateTime: printDateFormatted,
+          localUpdatedAt: Date.now()
         };
 
         setCloudBills(prev => [billDataObject, ...prev.filter(b => String(b.id) !== String(uniqueNumericId))]);
@@ -1341,7 +1390,7 @@
         }
       };
 
-      // Thermal BLE Print Command Generator
+      // Thermal BLE Print Generator with 4-letter city code
       const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
         if (!bleCharacteristic) return;
         const encoder = new TextEncoder();
@@ -1353,6 +1402,7 @@
         
         const headerText = [];
         if (printSettings.showName && custName) headerText.push(custName.toUpperCase());
+        if (printSettings.showCity && cityVal) headerText.push(`(${getCityCode(cityVal)})`);
         if (activeDate) headerText.push(activeDate);
         if (headerText.length > 0) esc.push(...encoder.encode(`${headerText.join(" - ")}\n`));
         
@@ -1447,6 +1497,7 @@
         });
       }, [cloudBills, reportPreset, reportStartDate, reportEndDate]);
 
+      // FIXED PRINT DATE RANGE REPORT WITH RELIABLE RENDER TIMEOUT
       const handlePrintDateRangeReport = () => {
         if (!isVerified) {
           triggerNotification("Passcode required to print ledger report!");
@@ -1481,7 +1532,7 @@
           reportHTML += `
             <tr class="border-b border-stone-300 py-2">
               <td class="py-2 text-stone-700">${b.date || "—"}</td>
-              <td class="py-2 uppercase font-black">${b.customerName} (${b.customerCity || "Local"})</td>
+              <td class="py-2 uppercase font-black">${b.customerName} (${b.customerCity ? getCityCode(b.customerCity) : "LOCA"})</td>
               <td class="py-2 text-right font-black">₹${Math.round(b.totalAmount || b.amount || 0)}</td>
             </tr>
           `;
@@ -1508,7 +1559,7 @@
           printBody.innerHTML = reportHTML;
           setTimeout(() => {
             window.print();
-          }, 100);
+          }, 200);
         }
       };
 
@@ -1537,6 +1588,41 @@
           {notification && (
             <div className="bg-amber-500 text-stone-950 py-2 px-4 text-center text-xs font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50 shadow-md">
               {notification}
+            </div>
+          )}
+
+          {/* New Bill Confirmation Modal */}
+          {showNewBillConfirmModal && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-slide-up no-print">
+              <div className="bg-white rounded-xl p-5 max-w-xs w-full shadow-2xl space-y-4 text-center border border-stone-300">
+                <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl font-black">
+                  <i className="fa-solid fa-plus"></i>
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-stone-900 uppercase">Start New Bill?</h3>
+                  <p className="text-xs text-stone-500 mt-1">Current customer fields, draft items, and bagged items will be cleared.</p>
+                </div>
+                <div className="flex gap-2">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowNewBillConfirmModal(false)} 
+                    className="flex-1 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-lg text-xs uppercase"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setShowNewBillConfirmModal(false);
+                      handleResetAll();
+                      triggerNotification("✓ Form reset - Ready for new bill!");
+                    }} 
+                    className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-lg text-xs uppercase shadow-sm"
+                  >
+                    New Bill
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1584,7 +1670,7 @@
           {/* Top Bar / Customer Selection & Include Last Balance Toggle */}
           <div className="bg-white p-2 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm flex-shrink-0">
             <div className="flex gap-1.5 items-center font-sans h-11">
-              <button type="button" onClick={handleResetAll} title="New Bill Reset" className="h-10 w-10 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-black shadow-xs active:scale-95 transition-all"><i className="fa-solid fa-plus-circle text-lg"></i></button>
+              <button type="button" onClick={() => setShowNewBillConfirmModal(true)} title="New Bill Reset" className="h-10 w-10 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-black shadow-xs active:scale-95 transition-all"><i className="fa-solid fa-plus-circle text-lg"></i></button>
               <button type="button" onClick={syncDataFromGoogleSheets} title="Sync Customer Database" className="h-10 w-10 flex items-center justify-center bg-stone-100 border text-stone-700 rounded-lg shadow-xs"><i className="fa-solid fa-sync"></i></button>
               
               <div className="flex-grow min-w-0 relative" ref={custRef}>
@@ -1604,7 +1690,7 @@
                     {filteredSheetsCustomers.map((c, i) => (
                       <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-2 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
                         <span>{c.name}</span>
-                        {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{c.city}</span>}
+                        {c.city && <span className="text-[9px] bg-stone-100 px-1 text-stone-600 rounded font-mono font-bold">{getCityCode(c.city)}</span>}
                       </div>
                     ))}
                   </div>
@@ -1616,7 +1702,7 @@
                 placeholder="City" 
                 value={customerCity} 
                 onChange={e => setCustomerCity(e.target.value)} 
-                className="w-14 px-1 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold"
+                className="w-14 px-1 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold uppercase"
               />
               
               {/* REQUIREMENT NO. 1: Default fill X% as 15 */}
@@ -1731,7 +1817,7 @@
                     <>
                       {/* GROUPED BAGGED ITEMS */}
                       {groupedBaggedItems.map(group => {
-                        // REQUIREMENT NO. 2: Default fill group less with 10 (not applied automatically until APPLY is tapped)
+                        // REQUIREMENT NO. 2: Default fill group less with 10 (not applied automatically until APPLY is clicked)
                         const defaultGroupLessVal = groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "10";
 
                         return (
@@ -1768,7 +1854,7 @@
                             </div>
 
                             {/* Touch-Friendly Child Item Rows */}
-                            {/* REQUIREMENT NO. 3: Item-level default Less is 0 (or blank) */}
+                            {/* REQUIREMENT NO. 3: Item-level default Less is 0 */}
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
                                 <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200">
@@ -1881,7 +1967,7 @@
                               <h2 className="text-xs font-bold uppercase leading-none">ESTIMATE RECEIPT</h2>
                               <p className="text-[8px]">Rough Statement Profile</p>
                               <p className="text-[9px] font-bold mt-1">{formatInvoiceDateTime(billDate)}</p>
-                              <p className="text-[9px] font-bold mt-0.5">{getThreeLetterCode(customerName)} ({getThreeLetterCode(customerCity)})</p>
+                              <p className="text-[9px] font-bold mt-0.5">{getThreeLetterCode(customerName)} {customerCity ? `(${getCityCode(customerCity)})` : ''}</p>
                             </div>
                             
                             <table className="w-full text-left text-[9px]">
@@ -2182,7 +2268,7 @@
                     {getSecureLogBills().map(b => (
                       <div key={b.id} className="border bg-white rounded-lg p-2 text-xs space-y-1 animate-slide-up shadow-xs">
                         <div className="flex justify-between font-bold">
-                          <span className="uppercase text-stone-950 truncate max-w-[180px]">{b.customerName} ({b.customerCity})</span>
+                          <span className="uppercase text-stone-950 truncate max-w-[180px]">{b.customerName} ({b.customerCity ? getCityCode(b.customerCity) : "LOCA"})</span>
                           <span className="font-mono text-stone-800 font-black">₹{Math.round(b.totalAmount || b.amount || 0)}</span>
                         </div>
                         <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
@@ -2345,7 +2431,7 @@
                       </label>
                       <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
                         <input type="checkbox" checked={printSettings.showCity} onChange={e => setPrintSettings({ ...printSettings, showCity: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
-                        <span>Print Customer City</span>
+                        <span>Print Customer City (4-Letter Code)</span>
                       </label>
                       <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
                         <input type="checkbox" checked={printSettings.showDate} onChange={e => setPrintSettings({ ...printSettings, showDate: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
