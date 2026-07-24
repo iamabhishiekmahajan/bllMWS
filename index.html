@@ -105,7 +105,7 @@
     const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
     const DEFAULT_LAST_BAL_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
 
-    // Case-Insensitive Property Extractors for Google Apps Script JSON Objects
+    // Case-Insensitive Property Extractors
     const getTxnName = (t) => t ? (t.name || t.Name || t.customerName || t.CustomerName || t.Customer || t.customer || "") : "";
     const getTxnAmount = (t) => {
       if (!t) return 0;
@@ -125,7 +125,7 @@
       return str.split('').map(d => cipherMap[d] || d).join('');
     };
 
-    // Helper to safely parse items whether array or JSON string from Sheets
+    // Safe items parser
     const parseItemsSafely = (itemsData) => {
       if (!itemsData) return [];
       if (Array.isArray(itemsData)) return itemsData;
@@ -141,7 +141,7 @@
       return [];
     };
 
-    // Helper to extract item total safely and accurately
+    // Item total calculator
     const getItemTotalAmount = (item) => {
       if (item.totalAmount !== undefined && !isNaN(parseFloat(item.totalAmount)) && parseFloat(item.totalAmount) > 0) {
         return parseFloat(item.totalAmount);
@@ -156,6 +156,31 @@
         ? parseFloat(item.finalUnitPrice) 
         : Math.max(0, baseP - lessP);
       return q * finalP;
+    };
+
+    const getTodayDateStr = () => new Date().toISOString().split('T')[0];
+
+    // Local Storage Balance Cache Helpers
+    const getLocalBalancesCache = () => {
+      try {
+        return JSON.parse(localStorage.getItem("customerBalancesCache") || "{}");
+      } catch (e) {
+        return {};
+      }
+    };
+
+    const saveLocalBalanceCache = (custName, balance, lastBilledInfo) => {
+      if (!custName) return;
+      const cache = getLocalBalancesCache();
+      const key = String(custName).toLowerCase().trim();
+      cache[key] = {
+        balance: parseFloat(balance) || 0,
+        lastBilledInfo: lastBilledInfo || null,
+        updatedDate: getTodayDateStr()
+      };
+      try {
+        localStorage.setItem("customerBalancesCache", JSON.stringify(cache));
+      } catch (e) {}
     };
 
     // Persistent deleted product keys filter
@@ -193,7 +218,7 @@
       }
     };
 
-    // IndexedDB Storage Engine
+    // IndexedDB Engine
     const idbStorage = {
       dbPromise: null,
       init() {
@@ -331,7 +356,7 @@
           items: cleanItems,
           customer: {
             name: bill.customerName,
-            city: bill.customerCity || "Local",
+            city: bill.customerCity || "",
             discount: bill.discountRate,
             joined: bill.date.split(" ")[0]
           }
@@ -425,7 +450,6 @@
       const [customerCity, setCustomerCity] = useState("");
       const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
       
-      // Default X% discount = 15
       const [discountX, setDiscountX] = useState("15"); 
 
       const [baggedItems, setBaggedItems] = useState([]);
@@ -511,12 +535,12 @@
       const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
       const getCityCode = (val) => {
-        if (!val) return "LOCA";
+        if (!val || val.toUpperCase() === "LOCAL") return "LOCA";
         const cleaned = val.replace(/[^a-zA-Z]/g, "").toUpperCase();
         return cleaned.slice(0, 4) || "LOCA";
       };
 
-      // Case-Insensitive Calculation of Last Balance (Sum of Bill - Sum of Pay)
+      // Compute last balance dynamically from a transaction list
       const computeLastBalanceFromTxnsArray = (txnsList, nameVal) => {
         if (!nameVal || !nameVal.trim() || !Array.isArray(txnsList)) return { balance: 0, latestBill: null };
         const targetKey = getNormalizedKey(nameVal);
@@ -550,22 +574,42 @@
         };
       };
 
-      // Fetch customer's last remaining balance and last bill info in background
-      const fetchLastBalanceInBackground = (nameVal) => {
+      // Load balance from local cache or trigger network fetch with safety timeout
+      const fetchLastBalanceInBackground = (nameVal, forceFetch = false) => {
         if (!nameVal || nameVal.trim() === "") {
           setLastBalanceAmount(0);
           setLastBilledInfo(null);
           return;
         }
 
-        // Check local bills state first
-        const localResult = computeLastBalanceFromTxnsArray(cloudBills, nameVal);
-        setLastBalanceAmount(localResult.balance);
+        const key = getNormalizedKey(nameVal);
+        const cache = getLocalBalancesCache();
+        const cachedItem = cache[key];
+
+        // Use local cache immediately if available and not forcing refresh
+        if (cachedItem && !forceFetch) {
+          setLastBalanceAmount(cachedItem.balance || 0);
+          setLastBilledInfo(cachedItem.lastBilledInfo || null);
+          if (cachedItem.updatedDate === getTodayDateStr()) {
+            return; // Up to date for today!
+          }
+        }
 
         setIsFetchingLastBalance(true);
         const callbackName = "handleBalanceFetch_" + Math.floor(Math.random() * 100000);
 
+        // Safety timeout of 8 seconds to prevent permanent spinner hanging
+        const timeoutId = setTimeout(() => {
+          if (window[callbackName]) {
+            setIsFetchingLastBalance(false);
+            document.getElementById(callbackName)?.remove();
+            delete window[callbackName];
+            console.warn("Balance fetch timed out, falling back to cached value.");
+          }
+        }, 8000);
+
         window[callbackName] = (data) => {
+          clearTimeout(timeoutId);
           if (data) {
             let txns = [];
             if (data.txns) txns = data.txns;
@@ -576,26 +620,36 @@
 
             const remoteResult = computeLastBalanceFromTxnsArray(txns, nameVal);
 
-            // Compute balance dynamically (bill - pay)
-            const finalBal = (txns && txns.length > 0) ? remoteResult.balance : (data.balance !== undefined ? parseFloat(data.balance) : localResult.balance);
+            let finalBal = remoteResult.balance;
+            if (data.balance !== undefined && !isNaN(parseFloat(data.balance))) {
+              finalBal = parseFloat(data.balance);
+            } else if (data.Balance !== undefined && !isNaN(parseFloat(data.Balance))) {
+              finalBal = parseFloat(data.Balance);
+            }
+
             setLastBalanceAmount(finalBal);
 
-            const activeLatestBill = remoteResult.latestBill || localResult.latestBill;
+            let activeLatestBill = remoteResult.latestBill;
+            let billingObj = null;
+
             if (activeLatestBill) {
               const rawDate = getTxnDate(activeLatestBill) || activeLatestBill.timestamp;
               const bDate = formatInvoiceDateTime(rawDate);
               const bAmt = getTxnAmount(activeLatestBill);
               const codeAmt = encodeKanpurcity(bAmt);
               const formattedDateStr = bDate ? bDate.split(' ')[0] : "";
-              setLastBilledInfo({
+              billingObj = {
                 date: formattedDateStr,
                 amount: bAmt,
                 code: codeAmt,
                 display: `${formattedDateStr} ${codeAmt}`
-              });
-            } else {
-              setLastBilledInfo(null);
+              };
             }
+
+            setLastBilledInfo(billingObj);
+
+            // Save to local cache for instant loading next time
+            saveLocalBalanceCache(nameVal, finalBal, billingObj);
           }
           setIsFetchingLastBalance(false);
           document.getElementById(callbackName)?.remove();
@@ -606,6 +660,7 @@
         script.id = callbackName;
         script.src = `${lastBalScriptUrl}?action=getData&callback=${callbackName}`;
         script.onerror = () => {
+          clearTimeout(timeoutId);
           setIsFetchingLastBalance(false);
           script.remove();
           delete window[callbackName];
@@ -615,9 +670,9 @@
 
       useEffect(() => {
         if (includeLastBalance && customerName.trim() !== "") {
-          fetchLastBalanceInBackground(customerName);
+          fetchLastBalanceInBackground(customerName, false);
         }
-      }, [includeLastBalance, customerName, cloudBills, lastBalScriptUrl]);
+      }, [includeLastBalance, customerName]);
 
       useEffect(() => {
         const loadIDBCache = async () => {
@@ -705,23 +760,29 @@
             if (rawCusts) {
               let parsedCustomers = [];
               if (Array.isArray(rawCusts)) {
-                parsedCustomers = rawCusts.map(c => ({
-                  name: c.name || c.Name || "",
-                  phone: c.phone || c.Phone || "",
-                  joined: c.joined || c.Joined || "",
-                  city: c.city || c.City || "Local",
-                  discount: c.discount || c.Discount || 0,
-                  balance: c.balance || c.Balance || 0
-                }));
+                parsedCustomers = rawCusts.map(c => {
+                  const rawCity = c.city || c.City || "";
+                  return {
+                    name: c.name || c.Name || "",
+                    phone: c.phone || c.Phone || "",
+                    joined: c.joined || c.Joined || "",
+                    city: (rawCity.toLowerCase() === "local") ? "" : rawCity,
+                    discount: c.discount || c.Discount || 0,
+                    balance: c.balance || c.Balance || 0
+                  };
+                });
               } else if (typeof rawCusts === "object") {
-                parsedCustomers = Object.entries(rawCusts).map(([name, details]) => ({
-                  name: name,
-                  phone: details ? (details.phone || details.Phone || "") : "",
-                  joined: details ? (details.joined || details.Joined || "") : "",
-                  city: details ? (details.city || details.City || "Local") : "Local",
-                  discount: details ? (details.discount || details.Discount || 0) : 0,
-                  balance: details ? (details.balance || details.Balance || 0) : 0
-                }));
+                parsedCustomers = Object.entries(rawCusts).map(([name, details]) => {
+                  const rawCity = details ? (details.city || details.City || "") : "";
+                  return {
+                    name: name,
+                    phone: details ? (details.phone || details.Phone || "") : "",
+                    joined: details ? (details.joined || details.Joined || "") : "",
+                    city: (rawCity.toLowerCase() === "local") ? "" : rawCity,
+                    discount: details ? (details.discount || details.Discount || 0) : 0,
+                    balance: details ? (details.balance || details.Balance || 0) : 0
+                  };
+                });
               }
               setDbCustomers(parsedCustomers);
               window.firebaseBridge.customers = parsedCustomers;
@@ -750,7 +811,7 @@
                   const localTxn = prevMap.get(remoteId);
                   const remoteItems = parseItemsSafely(getTxnItems(remoteTxn));
                   const remoteName = getTxnName(remoteTxn) || "Walk-In Customer";
-                  const remoteCity = remoteTxn.customerCity || remoteTxn.CustomerCity || remoteTxn.city || remoteTxn.City || "Local";
+                  const remoteCity = remoteTxn.customerCity || remoteTxn.CustomerCity || remoteTxn.city || remoteTxn.City || "";
                   const remoteAmount = getTxnAmount(remoteTxn);
                   const remoteType = getTxnType(remoteTxn);
 
@@ -847,14 +908,16 @@
         return "";
       };
 
+      // FIXED CUSTOMER SEARCH & SELECT (Preserves real city name, never overrides with "Local")
       const handleCustomerSearchAndSelect = (nameVal) => {
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerName(match.name);
-          setCustomerCity(match.city || "");
+          const matchedCity = match.city && match.city.toLowerCase() !== "local" ? match.city : "";
+          setCustomerCity(matchedCity);
           setDiscountX(match.discount !== undefined && match.discount !== 0 ? String(match.discount) : "15");
           setShowCustSuggestions(false);
-          fetchLastBalanceInBackground(match.name);
+          fetchLastBalanceInBackground(match.name, false);
         } else {
           setCustomerName("");
           setCustomerCity("");
@@ -887,11 +950,11 @@
 
         setCustomerName(loadedCustName);
 
-        if (loadedCity) {
+        if (loadedCity && loadedCity.toLowerCase() !== "local") {
           setCustomerCity(loadedCity);
         } else if (loadedCustName) {
           const custMatch = dbCustomers.find(c => c && c.name && getNormalizedKey(c.name) === getNormalizedKey(loadedCustName));
-          setCustomerCity(custMatch ? (custMatch.city || "") : "");
+          setCustomerCity(custMatch && custMatch.city && custMatch.city.toLowerCase() !== "local" ? custMatch.city : "");
         } else {
           setCustomerCity("");
         }
@@ -928,7 +991,7 @@
         triggerNotification(`✓ Loaded bill with all ${normalized.length} item(s)!`);
 
         if (loadedCustName) {
-          fetchLastBalanceInBackground(loadedCustName);
+          fetchLastBalanceInBackground(loadedCustName, false);
         }
       };
 
@@ -1066,7 +1129,7 @@
           idbStorage.cacheProducts(updatedProds);
         }
 
-        // Default Item Less = 0
+        // DEFAULT PER SKU ITEM LESS = 0
         const defaultSkuLess = "0";
         const finalUnitPrice = unitPrice;
 
@@ -1162,7 +1225,7 @@
         return Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0));
       }, [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // Renders receipts with Date & Time on separate line, plus Last Bill Info
+      // Renders receipts for printer/spool
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         const total = sortedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
@@ -1173,7 +1236,7 @@
         const cPadPx = `${printSettings.colSpacing}px`;
 
         const nameStr = (printSettings.showName && custName) ? custName.toUpperCase() : "";
-        const cityStr = (printSettings.showCity && cityVal) ? `(${getCityCode(cityVal)})` : "";
+        const cityStr = (printSettings.showCity && cityVal && cityVal.toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
         const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" ");
 
         const dateStrFormatted = formatInvoiceDateTime(billDate);
@@ -1289,6 +1352,18 @@
         };
 
         setCloudBills(prev => [billDataObject, ...prev.filter(b => String(getTxnId(b)) !== String(uniqueNumericId))]);
+
+        // Automatically update local balance cache upon print
+        if (customerName.trim()) {
+          const updatedBal = lastBalanceAmount + currentBillTotalSum;
+          const currentBilledInfo = {
+            date: formatInvoiceDateTime(billDate).split(' ')[0],
+            amount: currentBillTotalSum,
+            code: encodeKanpurcity(currentBillTotalSum),
+            display: `${formatInvoiceDateTime(billDate).split(' ')[0]} ${encodeKanpurcity(currentBillTotalSum)}`
+          };
+          saveLocalBalanceCache(customerName, updatedBal, currentBilledInfo);
+        }
 
         window.firebaseBridge.saveBillToCloudWithNumericId(uniqueNumericId, billDataObject, synchronousIsEdit, activeScriptUrl)
           .then(() => triggerNotification("✓ Bill saved locally & synced to Sheets!"))
@@ -1499,7 +1574,7 @@
         }
       };
 
-      // Thermal BLE Print Generator with Date/Time & Last Bill Info on Next Lines
+      // Thermal BLE Print Generator
       const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
         if (!bleCharacteristic) return;
         const encoder = new TextEncoder();
@@ -1510,7 +1585,7 @@
         esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
         
         const nameStr = (printSettings.showName && custName) ? custName.toUpperCase() : "";
-        const cityStr = (printSettings.showCity && cityVal) ? `(${getCityCode(cityVal)})` : "";
+        const cityStr = (printSettings.showCity && cityVal && cityVal.toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
         const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" - ");
 
         if (nameCityLine) {
@@ -1843,16 +1918,38 @@
                 />
               </div>
 
-              {/* Include Last Balance Checkbox */}
-              <label title="Include Customer's Last Balance" className={`px-1.5 py-1 h-10 rounded-lg border text-[9px] font-black uppercase flex items-center gap-1 cursor-pointer transition-colors ${includeLastBalance ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-stone-50 text-stone-500 border-stone-200'}`}>
-                <input 
-                  type="checkbox" 
-                  checked={includeLastBalance} 
-                  onChange={(e) => setIncludeLastBalance(e.target.checked)} 
-                  className="h-3.5 w-3.5 rounded text-amber-600 focus:ring-0 cursor-pointer"
-                />
-                <span>Last Bal</span>
-              </label>
+              {/* Include Last Balance Checkbox & Explicit Fetch Button */}
+              <div className="flex items-center gap-0.5">
+                <label title="Include Customer's Last Balance" className={`px-1.5 py-1 h-10 rounded-l-lg border text-[9px] font-black uppercase flex items-center gap-1 cursor-pointer transition-colors ${includeLastBalance ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-stone-50 text-stone-500 border-stone-200'}`}>
+                  <input 
+                    type="checkbox" 
+                    checked={includeLastBalance} 
+                    onChange={(e) => {
+                      setIncludeLastBalance(e.target.checked);
+                      if (e.target.checked && customerName.trim()) {
+                        fetchLastBalanceInBackground(customerName, false);
+                      }
+                    }} 
+                    className="h-3.5 w-3.5 rounded text-amber-600 focus:ring-0 cursor-pointer"
+                  />
+                  <span>Last Bal</span>
+                </label>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    if (customerName.trim()) {
+                      setIncludeLastBalance(true);
+                      fetchLastBalanceInBackground(customerName, true);
+                    } else {
+                      triggerNotification("Please select a customer first.");
+                    }
+                  }} 
+                  title="Fetch Latest Balance from Sheets"
+                  className="h-10 px-1.5 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-r-lg text-xs font-black border border-amber-400 flex items-center justify-center active:scale-95"
+                >
+                  <i className={`fa-solid fa-sync ${isFetchingLastBalance ? 'fa-spin' : ''}`}></i>
+                </button>
+              </div>
 
               <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-1.5 h-10 rounded-lg text-[8px] font-black tracking-wider flex items-center gap-0.5 transition-colors ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600 border'}`}>
                 <i className="fa-brands fa-bluetooth text-sm"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
@@ -1977,7 +2074,7 @@
                               </div>
                             </div>
 
-                            {/* Touch-Friendly Child Item Rows (STRICT 1-LINE NON-WRAPPING LAYOUT) */}
+                            {/* Child Item Rows (STRICT 1-LINE NON-WRAPPING LAYOUT) */}
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
                                 <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200 flex-nowrap overflow-hidden">
@@ -2042,7 +2139,7 @@
                                     </div>
                                   </div>
 
-                                  {/* Delete button on same line */}
+                                  {/* Delete button */}
                                   <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1 text-sm flex-shrink-0 h-8 flex items-center justify-center">
                                     <i className="fa-solid fa-xmark"></i>
                                   </button>
@@ -2404,7 +2501,7 @@
                       return (
                         <div key={bId} className="border bg-white rounded-lg p-2 text-xs space-y-1 animate-slide-up shadow-xs">
                           <div className="flex justify-between font-bold">
-                            <span className="uppercase text-stone-950 truncate max-w-[180px]">{bName} ({bCity ? getCityCode(bCity) : "LOCA"})</span>
+                            <span className="uppercase text-stone-950 truncate max-w-[180px]">{bName} ({bCity && bCity.toLowerCase() !== "local" ? getCityCode(bCity) : "LOCA"})</span>
                             <span className="font-mono text-stone-800 font-black">₹{Math.round(bAmt)}</span>
                           </div>
                           <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
