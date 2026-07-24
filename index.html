@@ -106,20 +106,20 @@
     const DEFAULT_LAST_BAL_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
 
     // Case-Insensitive Property Extractors
-    const getTxnName = (t) => t ? (t.name || t.Name || t.customerName || t.CustomerName || t.Customer || t.customer || "") : "";
+    const getTxnName = (t) => t ? String(t.name || t.Name || t.customerName || t.CustomerName || t.Customer || t.customer || "") : "";
     const getTxnAmount = (t) => {
       if (!t) return 0;
       const val = t.amount !== undefined ? t.amount : (t.Amount !== undefined ? t.Amount : (t.totalAmount !== undefined ? t.totalAmount : (t.TotalAmount !== undefined ? t.TotalAmount : (t.Amt !== undefined ? t.Amt : (t.amt !== undefined ? t.amt : 0)))));
       return parseFloat(val) || 0;
     };
     const getTxnType = (t) => t ? String(t.type || t.Type || t.TxnType || t.txnType || "bill").toLowerCase().trim() : "bill";
-    const getTxnDate = (t) => t ? (t.date || t.Date || t.timestamp || t.Timestamp || "") : "";
+    const getTxnDate = (t) => t ? String(t.date || t.Date || t.timestamp || t.Timestamp || "") : "";
     const getTxnItems = (t) => t ? (t.items || t.Items || []) : [];
-    const getTxnId = (t) => t ? (t.id || t.Id || t['#'] || "") : "";
+    const getTxnId = (t) => t ? String(t.id || t.Id || t['#'] || "") : "";
 
     // Cipher Encoding helper: KANPURCITY (K=1, A=2, N=3, P=4, U=5, R=6, C=7, I=8, T=9, Y=0)
     const encodeKanpurcity = (num) => {
-      if (num === undefined || num === null || isNaN(num) || num <= 0) return "";
+      if (num === undefined || num === null || isNaN(num) || num <= 0) return "Y";
       const cipherMap = { '1':'K', '2':'A', '3':'N', '4':'P', '5':'U', '6':'R', '7':'C', '8':'I', '9':'T', '0':'Y' };
       const str = String(Math.round(num));
       return str.split('').map(d => cipherMap[d] || d).join('');
@@ -143,6 +143,7 @@
 
     // Item total calculator
     const getItemTotalAmount = (item) => {
+      if (!item) return 0;
       if (item.totalAmount !== undefined && !isNaN(parseFloat(item.totalAmount)) && parseFloat(item.totalAmount) > 0) {
         return parseFloat(item.totalAmount);
       }
@@ -156,31 +157,6 @@
         ? parseFloat(item.finalUnitPrice) 
         : Math.max(0, baseP - lessP);
       return q * finalP;
-    };
-
-    const getTodayDateStr = () => new Date().toISOString().split('T')[0];
-
-    // Local Storage Balance Cache Helpers
-    const getLocalBalancesCache = () => {
-      try {
-        return JSON.parse(localStorage.getItem("customerBalancesCache") || "{}");
-      } catch (e) {
-        return {};
-      }
-    };
-
-    const saveLocalBalanceCache = (custName, balance, lastBilledInfo) => {
-      if (!custName) return;
-      const cache = getLocalBalancesCache();
-      const key = String(custName).toLowerCase().trim();
-      cache[key] = {
-        balance: parseFloat(balance) || 0,
-        lastBilledInfo: lastBilledInfo || null,
-        updatedDate: getTodayDateStr()
-      };
-      try {
-        localStorage.setItem("customerBalancesCache", JSON.stringify(cache));
-      } catch (e) {}
     };
 
     // Persistent deleted product keys filter
@@ -218,7 +194,32 @@
       }
     };
 
-    // IndexedDB Engine
+    const getTodayDateStr = () => new Date().toISOString().split('T')[0];
+
+    // Local Storage Balance Cache
+    const getLocalBalancesCache = () => {
+      try {
+        return JSON.parse(localStorage.getItem("customerBalancesCache") || "{}");
+      } catch (e) {
+        return {};
+      }
+    };
+
+    const saveLocalBalanceCache = (custName, balance, lastBilledInfo) => {
+      if (!custName) return;
+      const cache = getLocalBalancesCache();
+      const key = String(custName).toLowerCase().trim();
+      cache[key] = {
+        balance: parseFloat(balance) || 0,
+        lastBilledInfo: lastBilledInfo || null,
+        updatedDate: getTodayDateStr()
+      };
+      try {
+        localStorage.setItem("customerBalancesCache", JSON.stringify(cache));
+      } catch (e) {}
+    };
+
+    // IndexedDB Storage Engine
     const idbStorage = {
       dbPromise: null,
       init() {
@@ -336,7 +337,7 @@
         const cleanItems = (bill.items || []).map(item => ({
           qty: parseFloat(item.qty) || 1,
           name: item.name || "Item",
-          code: (item.code && item.code !== "—") ? item.code : "",
+          code: (item.code && item.code !== "—") ? String(item.code) : "",
           basePrice: parseFloat(item.basePrice || item.rate || item.price || 0),
           less: String(item.less !== undefined && item.less !== null ? item.less : "0"),
           finalUnitPrice: parseFloat(item.finalUnitPrice || 0),
@@ -356,7 +357,7 @@
           items: cleanItems,
           customer: {
             name: bill.customerName,
-            city: bill.customerCity || "",
+            city: bill.customerCity || "Local",
             discount: bill.discountRate,
             joined: bill.date.split(" ")[0]
           }
@@ -461,7 +462,6 @@
       const [notification, setNotification] = useState("");
       const [parserInput, setParserInput] = useState("");
       const [lastProductName, setLastProductName] = useState("");
-      const [showPreview, setShowPreview] = useState(false);
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
       const [isVerified, setIsVerified] = useState(false);
@@ -516,7 +516,7 @@
       }, [printSettings]);
 
       // Date Range Report States
-      const [reportPreset, setReportPreset] = useState("last7");
+      const [reportPreset, setReportPreset] = useState("2days");
       const [reportStartDate, setReportStartDate] = useState(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
       const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -532,11 +532,11 @@
       };
 
       const getNormalizedKey = (str) => str ? String(str).toLowerCase().trim().replace(/\s+/g, ' ') : "";
-      const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+      const toTitleCase = (str) => String(str || "").replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
       const getCityCode = (val) => {
-        if (!val || val.toUpperCase() === "LOCAL") return "LOCA";
-        const cleaned = val.replace(/[^a-zA-Z]/g, "").toUpperCase();
+        if (!val || String(val).toUpperCase() === "LOCAL") return "LOCA";
+        const cleaned = String(val).replace(/[^a-zA-Z]/g, "").toUpperCase();
         return cleaned.slice(0, 4) || "LOCA";
       };
 
@@ -574,7 +574,7 @@
         };
       };
 
-      // Load balance from local cache or trigger network fetch with safety timeout
+      // Fetch customer's last balance & last bill info
       const fetchLastBalanceInBackground = (nameVal, forceFetch = false) => {
         if (!nameVal || nameVal.trim() === "") {
           setLastBalanceAmount(0);
@@ -586,19 +586,17 @@
         const cache = getLocalBalancesCache();
         const cachedItem = cache[key];
 
-        // Use local cache immediately if available and not forcing refresh
         if (cachedItem && !forceFetch) {
           setLastBalanceAmount(cachedItem.balance || 0);
           setLastBilledInfo(cachedItem.lastBilledInfo || null);
           if (cachedItem.updatedDate === getTodayDateStr()) {
-            return; // Up to date for today!
+            return;
           }
         }
 
         setIsFetchingLastBalance(true);
         const callbackName = "handleBalanceFetch_" + Math.floor(Math.random() * 100000);
 
-        // Safety timeout of 8 seconds to prevent permanent spinner hanging
         const timeoutId = setTimeout(() => {
           if (window[callbackName]) {
             setIsFetchingLastBalance(false);
@@ -647,8 +645,6 @@
             }
 
             setLastBilledInfo(billingObj);
-
-            // Save to local cache for instant loading next time
             saveLocalBalanceCache(nameVal, finalBal, billingObj);
           }
           setIsFetchingLastBalance(false);
@@ -761,7 +757,7 @@
               let parsedCustomers = [];
               if (Array.isArray(rawCusts)) {
                 parsedCustomers = rawCusts.map(c => {
-                  const rawCity = c.city || c.City || "";
+                  const rawCity = String(c.city || c.City || "");
                   return {
                     name: c.name || c.Name || "",
                     phone: c.phone || c.Phone || "",
@@ -773,7 +769,7 @@
                 });
               } else if (typeof rawCusts === "object") {
                 parsedCustomers = Object.entries(rawCusts).map(([name, details]) => {
-                  const rawCity = details ? (details.city || details.City || "") : "";
+                  const rawCity = details ? String(details.city || details.City || "") : "";
                   return {
                     name: name,
                     phone: details ? (details.phone || details.Phone || "") : "",
@@ -895,6 +891,7 @@
       const formatInvoiceDateTime = (dateStr) => {
         const baseDate = dateStr ? new Date(dateStr) : new Date();
         const currentRealTime = new Date();
+        if (isNaN(baseDate.getTime())) return "";
         baseDate.setHours(currentRealTime.getHours(), currentRealTime.getMinutes());
         const day = String(baseDate.getDate()).padStart(2, '0');
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -908,12 +905,11 @@
         return "";
       };
 
-      // FIXED CUSTOMER SEARCH & SELECT (Preserves real city name, never overrides with "Local")
       const handleCustomerSearchAndSelect = (nameVal) => {
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerName(match.name);
-          const matchedCity = match.city && match.city.toLowerCase() !== "local" ? match.city : "";
+          const matchedCity = match.city && String(match.city).toLowerCase() !== "local" ? match.city : "";
           setCustomerCity(matchedCity);
           setDiscountX(match.discount !== undefined && match.discount !== 0 ? String(match.discount) : "15");
           setShowCustSuggestions(false);
@@ -950,11 +946,11 @@
 
         setCustomerName(loadedCustName);
 
-        if (loadedCity && loadedCity.toLowerCase() !== "local") {
+        if (loadedCity && String(loadedCity).toLowerCase() !== "local") {
           setCustomerCity(loadedCity);
         } else if (loadedCustName) {
           const custMatch = dbCustomers.find(c => c && c.name && getNormalizedKey(c.name) === getNormalizedKey(loadedCustName));
-          setCustomerCity(custMatch && custMatch.city && custMatch.city.toLowerCase() !== "local" ? custMatch.city : "");
+          setCustomerCity(custMatch && custMatch.city && String(custMatch.city).toLowerCase() !== "local" ? custMatch.city : "");
         } else {
           setCustomerCity("");
         }
@@ -966,7 +962,7 @@
         const normalized = rawItems.map((i, idx) => {
           const qtyVal = parseFloat(i.qty) || 1;
           const priceVal = parseFloat(i.basePrice || i.rate || i.price || i.finalUnitPrice || 0);
-          const lessVal = (i.less !== undefined && i.less !== null && i.less !== "—") ? String(i.less) : "0";
+          const lessVal = (i.less !== undefined && i.less !== null && String(i.less) !== "—") ? String(i.less) : "0";
           const deduct = (lessVal !== "—" && !isNaN(parseFloat(lessVal))) ? parseFloat(lessVal) : 0;
           const finalPrice = i.finalUnitPrice !== undefined && !isNaN(parseFloat(i.finalUnitPrice))
             ? parseFloat(i.finalUnitPrice) 
@@ -977,7 +973,7 @@
             id: 'loaded_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).substring(2, 7),
             qty: qtyVal,
             name: i.name || "Item",
-            code: (i.code && i.code !== "—" && i.code !== "") ? i.code : "—",
+            code: (i.code && String(i.code) !== "—" && String(i.code) !== "") ? String(i.code) : "—",
             basePrice: priceVal,
             less: lessVal,
             finalUnitPrice: finalPrice,
@@ -996,7 +992,7 @@
       };
 
       const calculateRateForToken = (codeStr, rawX) => {
-        const cleanCode = codeStr.toLowerCase().trim();
+        const cleanCode = String(codeStr || "").toLowerCase().trim();
         const discountRate = parseFloat(rawX) || 0;
         if (cleanCode.endsWith('n')) {
           const val = parseFloat(cleanCode.slice(0, -1));
@@ -1013,7 +1009,6 @@
         return !isNaN(parseFloat(cleanCode)) ? parseFloat(cleanCode) : 0;
       };
 
-      // Directory shortcuts sorted by most typed / billed first
       const mostTypedProducts = useMemo(() => {
         if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
         const deletedKeys = getDeletedProductKeys();
@@ -1039,7 +1034,6 @@
           });
       }, [cloudProducts, cloudBills]);
 
-      // Inline Autocomplete Suggestion
       const autocompleteSuggestion = useMemo(() => {
         if (!printSettings.enableInlineAutocomplete || !parserInput.trim()) return "";
         const trimmed = parserInput.trimStart();
@@ -1054,7 +1048,6 @@
         return "";
       }, [parserInput, mostTypedProducts, printSettings.enableInlineAutocomplete]);
 
-      // FAST PARSER SUBMIT
       const handleParserSubmit = (e) => {
         e.preventDefault();
         let rawInput = parserInput.trim();
@@ -1065,7 +1058,7 @@
         }
 
         const isSuffixCode = (str) => {
-          const s = str.toLowerCase().trim();
+          const s = String(str || "").toLowerCase().trim();
           return s.endsWith('n') || s.endsWith('no') || s.endsWith('nu');
         };
 
@@ -1129,7 +1122,6 @@
           idbStorage.cacheProducts(updatedProds);
         }
 
-        // DEFAULT PER SKU ITEM LESS = 0
         const defaultSkuLess = "0";
         const finalUnitPrice = unitPrice;
 
@@ -1159,12 +1151,12 @@
             if (field === 'basePrice') updated.basePrice = parseFloat(value) || 0;
             if (field === 'less') updated.less = value;
 
-            if (updated.code !== "—" && updated.code !== "" && field === 'code') {
+            if (updated.code !== "—" && String(updated.code) !== "" && field === 'code') {
               updated.basePrice = calculateRateForToken(updated.code, discountX);
             }
 
             let deduction = 0;
-            const cleanLess = String(updated.less).trim();
+            const cleanLess = String(updated.less || "").trim();
             if (cleanLess !== "" && cleanLess !== "—") {
               deduction = parseFloat(cleanLess) || 0;
             }
@@ -1177,7 +1169,6 @@
         }));
       };
 
-      // Group Less Handler - Default fill 10
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
         const valToApply = lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10";
         const amt = parseFloat(valToApply) || 0;
@@ -1193,7 +1184,6 @@
         triggerNotification(`Applied ₹${amt} Less to all ${groupKey.toUpperCase()} items!`);
       };
 
-      // Grouping bagged items by Item Name
       const groupedBaggedItems = useMemo(() => {
         const groups = {};
         baggedItems.forEach(item => {
@@ -1201,7 +1191,7 @@
           if (!groups[key]) {
             groups[key] = {
               key: key,
-              displayName: item.name,
+              displayName: item.name || "Item",
               totalQty: 0,
               totalAmount: 0,
               items: []
@@ -1215,39 +1205,39 @@
         return Object.values(groups);
       }, [baggedItems]);
 
-      // Total Current Bill Liability Sum
       const currentBillTotalSum = useMemo(() => {
         return baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
       }, [baggedItems]);
 
-      // Grand Total Balance
       const grandFinalBalance = useMemo(() => {
         return Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0));
       }, [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // Renders receipts for printer/spool
+      // FAIL-SAFE RECEIPT SPOOL GENERATOR
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
-        const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
+        const safeItems = Array.isArray(itemsList) ? itemsList : [];
+        const sortedItems = [...safeItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
         const total = sortedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
 
-        const fontFamCss = printSettings.fontFamily === 'Roboto Mono' ? "'Roboto Mono', monospace" : "'Courier Prime', monospace";
-        const fSizePx = `${printSettings.fontSize}px`;
-        const rPadPx = `${printSettings.rowSpacing}px`;
-        const cPadPx = `${printSettings.colSpacing}px`;
+        const fontFamCss = (printSettings?.fontFamily === 'Roboto Mono') ? "'Roboto Mono', monospace" : "'Courier Prime', monospace";
+        const fSizePx = `${printSettings?.fontSize || 24}px`;
+        const rPadPx = `${printSettings?.rowSpacing || 8}px`;
+        const cPadPx = `${printSettings?.colSpacing || 4}px`;
 
-        const nameStr = (printSettings.showName && custName) ? custName.toUpperCase() : "";
-        const cityStr = (printSettings.showCity && cityVal && cityVal.toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
+        const nameStr = (printSettings?.showName && custName) ? String(custName).toUpperCase() : "";
+        const cityStr = (printSettings?.showCity && cityVal && String(cityVal).toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
         const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" ");
 
         const dateStrFormatted = formatInvoiceDateTime(billDate);
         const lastBillLine = lastBilledInfo ? `LAST BILL: ${lastBilledInfo.display}` : "";
 
-        const footerLines = (printSettings.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
+        const footerMessageRaw = printSettings?.footerMessage || "Thank You For Your Visit\nPlease Visit Again";
+        const footerLines = String(footerMessageRaw).split('\n');
 
         let receiptHTML = `
           <div style="font-family: ${fontFamCss};" class="text-center pb-3 mb-3 border-b-4 border-black">
-            <h2 style="font-size: ${Math.round(parseInt(printSettings.fontSize)*1.4)}px;" class="font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
-            <p style="font-size: ${Math.round(parseInt(printSettings.fontSize)*0.8)}px;" class="font-bold mt-1">Rough Statement Profile</p>
+            <h2 style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*1.4)}px;" class="font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
+            <p style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*0.8)}px;" class="font-bold mt-1">Rough Statement Profile</p>
             ${(nameCityLine || dateStrFormatted || lastBillLine) ? `
               <div style="font-size: ${fSizePx};" class="mt-2 text-center font-black border-y-2 border-dashed border-black py-1.5 space-y-0.5">
                 ${nameCityLine ? `<div>${nameCityLine}</div>` : ""}
@@ -1269,7 +1259,7 @@
         `;
 
         sortedItems.forEach((item, index) => {
-          const rawCodeOnly = (item.code && item.code !== "—") ? item.code.trim() : "";
+          const rawCodeOnly = (item.code && String(item.code) !== "—") ? String(item.code).trim() : "";
           const itemAmt = getItemTotalAmount(item);
           const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || item.price || 0);
 
@@ -1277,8 +1267,8 @@
             <tr class="align-top border-b border-stone-200">
               <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${Math.round(item.qty || 1)}</td>
               <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="font-bold uppercase whitespace-pre-wrap break-all leading-tight">
-                <div>${item.name.trim().toUpperCase()}</div>
-                ${rawCodeOnly ? `<div style="font-size: ${Math.round(parseInt(printSettings.fontSize)*0.75)}px;" class="text-stone-700 font-normal tracking-wide">${rawCodeOnly}</div>` : ""}
+                <div>${String(item.name || "").trim().toUpperCase()}</div>
+                ${rawCodeOnly ? `<div style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*0.75)}px;" class="text-stone-700 font-normal tracking-wide">${rawCodeOnly}</div>` : ""}
               </td>
               <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(unitP)}</td>
               <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(itemAmt)}</td>
@@ -1308,7 +1298,7 @@
                 <span>₹${Math.round(lastBalanceAmount)}</span>
               </div>
             ` : ""}
-            <div style="font-size: ${Math.round(parseInt(printSettings.fontSize)*1.25)}px;" class="flex justify-between font-black border-t-4 border-black pt-2 mt-1">
+            <div style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*1.25)}px;" class="flex justify-between font-black border-t-4 border-black pt-2 mt-1">
               <span>TOTAL:</span>
               <span>₹${Math.round(total + (includeLastBalance ? lastBalanceAmount : 0))}</span>
             </div>
@@ -1353,7 +1343,6 @@
 
         setCloudBills(prev => [billDataObject, ...prev.filter(b => String(getTxnId(b)) !== String(uniqueNumericId))]);
 
-        // Automatically update local balance cache upon print
         if (customerName.trim()) {
           const updatedBal = lastBalanceAmount + currentBillTotalSum;
           const currentBilledInfo = {
@@ -1547,7 +1536,8 @@
         if (parserRef.current) parserRef.current.focus();
       };
 
-      const getSecureLogBills = () => isVerified ? cloudBills : cloudBills.slice(0, 3);
+      // Unverified shows 2 bills, Verified shows 12 bills
+      const getSecureLogBills = () => isVerified ? cloudBills.slice(0, 12) : cloudBills.slice(0, 2);
 
       const handleProductAddSubmit = async (e) => {
         e.preventDefault();
@@ -1584,8 +1574,8 @@
         esc.push(0x1B, 0x61, 0x01); // Center
         esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
         
-        const nameStr = (printSettings.showName && custName) ? custName.toUpperCase() : "";
-        const cityStr = (printSettings.showCity && cityVal && cityVal.toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
+        const nameStr = (printSettings?.showName && custName) ? String(custName).toUpperCase() : "";
+        const cityStr = (printSettings?.showCity && cityVal && String(cityVal).toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
         const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" - ");
 
         if (nameCityLine) {
@@ -1603,14 +1593,14 @@
         esc.push(...encoder.encode("--------------------------------\n"));
         
         esc.push(0x1B, 0x61, 0x00); // Left align
-        const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
+        const sortedItems = [...itemsList].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
         
         let sumTotal = 0;
         sortedItems.forEach((item, index) => {
           const itemAmt = getItemTotalAmount(item);
           sumTotal += itemAmt;
 
-          const nameStr = item.name.trim().toUpperCase().slice(0, 15);
+          const nameStr = String(item.name || "").trim().toUpperCase().slice(0, 15);
           const qStr = String(Math.round(item.qty || 1)).padEnd(3);
           const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || 0);
           const pStr = String(Math.round(unitP)).padStart(4);
@@ -1618,8 +1608,8 @@
           
           esc.push(...encoder.encode(`${qStr} ${nameStr.padEnd(15)} ${pStr} ${totalStr}\n`));
           
-          if (item.code && item.code !== "—") {
-            esc.push(...encoder.encode(`    ${item.code.trim()}\n`));
+          if (item.code && String(item.code) !== "—") {
+            esc.push(...encoder.encode(`    ${String(item.code).trim()}\n`));
           }
 
           if ((index + 1) % 5 === 0 && index !== sortedItems.length - 1) {
@@ -1637,7 +1627,7 @@
         esc.push(...encoder.encode(`TOTAL:                   ${Math.round(finalGrandTotal)}\n\n`));
 
         // Custom Thank You Message
-        const footerLines = (printSettings.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
+        const footerLines = String(printSettings?.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
         esc.push(0x1B, 0x61, 0x01); // Center
         footerLines.forEach(line => {
           if (line.trim()) {
@@ -1661,8 +1651,30 @@
         ? [] 
         : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
 
+      // 2-Day Report Breakdown (Today & Yesterday)
+      const twoDaysReportBills = useMemo(() => {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const twoDaysAgoStart = todayStart - (1 * 24 * 60 * 60 * 1000);
+
+        return cloudBills.filter(b => {
+          const custNameLower = getNormalizedKey(getTxnName(b));
+          const isWalkIn = custNameLower === "walk-in customer" || custNameLower === "walkin" || custNameLower === "" || custNameLower === "walk in";
+          if (isWalkIn) return false;
+
+          const bId = getTxnId(b);
+          const bDate = getTxnDate(b);
+          const bTime = bId ? Number(bId) : new Date(bDate || 0).getTime();
+          return bTime >= twoDaysAgoStart;
+        });
+      }, [cloudBills]);
+
       // Date Range Bill Report Filtering
       const filteredReportBills = useMemo(() => {
+        if (reportPreset === "2days") {
+          return twoDaysReportBills;
+        }
+
         let startMs = 0;
         let endMs = Infinity;
 
@@ -1682,7 +1694,7 @@
         }
 
         return cloudBills.filter(b => {
-          const custNameLower = (getTxnName(b)).trim().toLowerCase();
+          const custNameLower = getNormalizedKey(getTxnName(b));
           const isWalkIn = custNameLower === "walk-in customer" || custNameLower === "walkin" || custNameLower === "" || custNameLower === "walk in";
           if (isWalkIn) return false;
 
@@ -1691,20 +1703,15 @@
           const bTime = bId ? Number(bId) : new Date(bDate || 0).getTime();
           return bTime >= startMs && bTime <= endMs;
         });
-      }, [cloudBills, reportPreset, reportStartDate, reportEndDate]);
+      }, [cloudBills, reportPreset, reportStartDate, reportEndDate, twoDaysReportBills]);
 
       const handlePrintDateRangeReport = () => {
-        if (!isVerified) {
-          triggerNotification("Passcode required to print ledger report!");
-          return;
-        }
-
         if (filteredReportBills.length === 0) {
           triggerNotification("No registered customer bills found in this range.");
           return;
         }
 
-        const totalRevenue = filteredReportBills.reduce((acc, b) => acc + (b.totalAmount || b.amount || 0), 0);
+        const totalRevenue = filteredReportBills.reduce((acc, b) => acc + getTxnAmount(b), 0);
 
         let reportHTML = `
           <div class="text-center pb-4 mb-4 border-b-4 border-black font-mono">
@@ -1729,11 +1736,13 @@
           const bAmt = getTxnAmount(b);
           const bDate = getTxnDate(b);
 
+          const displayAmtStr = isVerified ? `₹${Math.round(bAmt)}` : encodeKanpurcity(bAmt);
+
           reportHTML += `
             <tr class="border-b border-stone-300 py-2">
               <td class="py-2 text-stone-700">${bDate || "—"}</td>
               <td class="py-2 uppercase font-black">${bName} (${bCity ? getCityCode(bCity) : "LOCA"})</td>
-              <td class="py-2 text-right font-black">₹${Math.round(bAmt)}</td>
+              <td class="py-2 text-right font-black">${displayAmtStr}</td>
             </tr>
           `;
 
@@ -1746,11 +1755,13 @@
           }
         });
 
+        const totalDisplayStr = isVerified ? `₹${Math.round(totalRevenue)}` : encodeKanpurcity(totalRevenue);
+
         reportHTML += `
             </tbody>
           </table>
           <div class="mt-6 pt-4 border-t-4 border-black text-right text-[28px] font-mono font-black">
-            Total Revenue: ₹${Math.round(totalRevenue)}
+            Total Revenue: ${totalDisplayStr}
           </div>
         `;
 
@@ -2074,7 +2085,7 @@
                               </div>
                             </div>
 
-                            {/* Child Item Rows (STRICT 1-LINE NON-WRAPPING LAYOUT) */}
+                            {/* Touch-Friendly Child Item Rows (STRICT 1-LINE NON-WRAPPING LAYOUT) */}
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
                                 <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200 flex-nowrap overflow-hidden">
@@ -2173,67 +2184,6 @@
                           <span className="uppercase tracking-wider">TOTAL:</span>
                           <span className="font-mono text-base text-amber-600 font-black">₹{grandFinalBalance}</span>
                         </div>
-                      </div>
-
-                      {/* Collapsible Receipt Preview Button */}
-                      <div className="no-print">
-                        <button 
-                          type="button" 
-                          onClick={() => setShowPreview(!showPreview)} 
-                          className="w-full bg-stone-200 hover:bg-stone-300 p-2 rounded-lg border flex justify-between items-center text-xs font-black text-stone-700"
-                        >
-                          <span><i className="fa-solid fa-receipt mr-1.5"></i> Receipt Preview</span>
-                          <span className="text-xs">{showPreview ? '- Hide Preview' : '+ View Preview'}</span>
-                        </button>
-
-                        {showPreview && (
-                          <div className="bg-white border border-stone-300 p-3 rounded-xl shadow-inner max-w-sm mx-auto font-mono text-xs text-black mt-2">
-                            <div className="text-center pb-2 mb-2 border-b border-dashed border-black space-y-0.5">
-                              <h2 className="text-xs font-bold uppercase leading-none">ESTIMATE RECEIPT</h2>
-                              <p className="text-[8px]">Rough Statement Profile</p>
-                              <p className="text-[9px] font-bold">{getThreeLetterCode(customerName)} {customerCity ? `(${getCityCode(customerCity)})` : ''}</p>
-                              <p className="text-[9px] font-bold">{formatInvoiceDateTime(billDate)}</p>
-                              {lastBilledInfo && <p className="text-[9px] font-extrabold text-stone-700">LAST BILL: {lastBilledInfo.display}</p>}
-                            </div>
-                            
-                            <table className="w-full text-left text-[9px]">
-                              <thead>
-                                <tr className="border-b border-black">
-                                  <th className="w-5 text-center">QT</th>
-                                  <th>ITEM</th>
-                                  <th className="text-right w-8">P</th>
-                                  <th className="text-right w-10">AMT</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {[...baggedItems].sort((a,b) => a.name.localeCompare(b.name)).map((item, idx) => (
-                                  <React.Fragment key={idx}>
-                                    <tr className="align-top border-b border-stone-100">
-                                      <td className="text-center font-bold">{Math.round(item.qty || 1)}</td>
-                                      <td className="uppercase font-bold">
-                                        {item.name}
-                                        {item.code && item.code !== "—" && <span className="block text-[8px] text-stone-600 font-mono font-normal">{item.code.trim()}</span>}
-                                      </td>
-                                      <td className="text-right">{Math.round(item.finalUnitPrice)}</td>
-                                      <td className="text-right font-bold">{Math.round(getItemTotalAmount(item))}</td>
-                                    </tr>
-                                    {(idx + 1) % 5 === 0 && idx !== baggedItems.length - 1 && (
-                                      <tr>
-                                        <td colspan="4" className="py-0.5 border-b border-dotted border-stone-400"></td>
-                                      </tr>
-                                    )}
-                                  </React.Fragment>
-                                ))}
-                              </tbody>
-                            </table>
-
-                            <div className="mt-2 pt-1.5 border-t border-dashed border-black text-right text-[10px] font-bold space-y-0.5">
-                              <div>Bill Total: ₹{Math.round(currentBillTotalSum)}</div>
-                              {includeLastBalance && <div>Last Balance: ₹{Math.round(lastBalanceAmount)}</div>}
-                              <div className="border-t pt-1 font-black text-[11px]">TOTAL: ₹{grandFinalBalance}</div>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     </>
                   )}
@@ -2382,112 +2332,139 @@
               </div>
             )}
 
-            {/* HISTORIC & DATE RANGE BILL REPORT TAB */}
+            {/* HISTORIC & 2-DAY REPORT TAB */}
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 
-                {!isVerified ? (
-                  <div className="bg-white border rounded-xl p-6 text-center space-y-3 shadow-xs">
-                    <i className="fa-solid fa-lock text-3xl text-stone-400"></i>
-                    <p className="text-xs font-bold text-stone-700">Enter passcode to view full historic ledger & reports.</p>
-                    <input 
-                      type="password" 
-                      placeholder="Passcode..." 
-                      value={passwordInput}
-                      onChange={(e) => {
-                        setPasswordInput(e.target.value);
-                        if (e.target.value === "ab") setIsVerified(true);
-                      }}
-                      className="w-32 text-center p-2 border-2 border-stone-800 rounded-lg text-sm font-mono focus:outline-none font-bold bg-stone-50 mx-auto block"
-                    />
-                  </div>
-                ) : (
-                  <>
-                    {/* DATE RANGE REPORT GENERATOR */}
-                    <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
-                      <div className="flex justify-between items-center border-b pb-1">
-                        <span className="text-[10px] font-black uppercase text-stone-500">Date Range Ledger Report</span>
-                        <span className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 rounded">Excludes Walk-In</span>
-                      </div>
-
-                      <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
-                        {["today", "last7", "last30", "custom"].map(preset => (
-                          <button 
-                            key={preset}
-                            type="button"
-                            onClick={() => setReportPreset(preset)}
-                            className={`py-1 rounded text-center uppercase border transition-all ${reportPreset === preset ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}
-                          >
-                            {preset}
-                          </button>
-                        ))}
-                      </div>
-
-                      {reportPreset === "custom" && (
-                        <div className="grid grid-cols-2 gap-1.5 pt-1">
-                          <div>
-                            <span className="text-[8px] font-black text-stone-400 uppercase">From:</span>
-                            <input type="date" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
-                          </div>
-                          <div>
-                            <span className="text-[8px] font-black text-stone-400 uppercase">To:</span>
-                            <input type="date" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="flex justify-between items-center pt-1 border-t">
-                        <span className="text-xs font-bold text-stone-800">Valid Bills: <span className="font-mono text-amber-600 font-black">{filteredReportBills.length}</span></span>
+                {/* 2-DAY REPORT BREAKDOWN */}
+                <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
+                  <div className="flex justify-between items-center border-b pb-1">
+                    <span className="text-[10px] font-black uppercase text-stone-700 tracking-wider">2-Day Ledger Report</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${isVerified ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-900'}`}>
+                        {isVerified ? 'Original Unlocked' : 'Ciphertext Mode'}
+                      </span>
+                      {isVerified && (
                         <button 
                           type="button" 
-                          onClick={handlePrintDateRangeReport} 
-                          className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded text-xs uppercase flex items-center gap-1 shadow-xs"
+                          onClick={() => { setIsVerified(false); setPasswordInput(""); triggerNotification("🔒 Ledger locked!"); }}
+                          className="px-2 py-0.5 bg-stone-800 hover:bg-stone-950 text-amber-400 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-xs active:scale-95"
                         >
-                          <i className="fa-solid fa-print"></i> Print Report
+                          <i className="fa-solid fa-lock text-[9px]"></i> Lock
                         </button>
-                      </div>
+                      )}
+                    </div>
+                  </div>
 
-                      {/* ON-SCREEN REPORT DISPLAY BELOW */}
-                      <div className="mt-2 pt-2 border-t border-dashed border-stone-300">
-                        <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider mb-1">Report Breakdown ({reportPreset.toUpperCase()})</span>
-                        {filteredReportBills.length === 0 ? (
-                          <div className="text-center text-[10px] text-stone-400 py-2 italic">No registered customer bills in this period.</div>
-                        ) : (
-                          <div className="max-h-40 overflow-y-auto custom-scroll border rounded bg-stone-50 p-1.5 text-xs font-mono">
-                            <table className="w-full text-left">
-                              <thead>
-                                <tr className="border-b text-[9px] text-stone-500 uppercase font-sans font-bold">
-                                  <th className="pb-1">Date</th>
-                                  <th className="pb-1">Customer</th>
-                                  <th className="pb-1 text-right">Amount</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-stone-200">
-                                {filteredReportBills.map((b, i) => (
-                                  <tr key={i} className="text-[10px]">
-                                    <td className="py-1 text-stone-500">{getTxnDate(b) || "—"}</td>
-                                    <td className="py-1 font-bold uppercase text-stone-900 truncate max-w-[120px]">{getTxnName(b)}</td>
-                                    <td className="py-1 text-right font-black">₹{Math.round(getTxnAmount(b))}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                            <div className="mt-2 pt-1 border-t-2 border-stone-800 flex justify-between font-black text-xs text-stone-950">
-                              <span>Total Ledger Revenue:</span>
-                              <span>₹{Math.round(filteredReportBills.reduce((acc, b) => acc + getTxnAmount(b), 0))}</span>
-                            </div>
-                          </div>
-                        )}
+                  <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
+                    {[
+                      { key: "2days", label: "2 Days" },
+                      { key: "today", label: "Today" },
+                      { key: "last7", label: "7 Days" },
+                      { key: "custom", label: "Custom" }
+                    ].map(preset => (
+                      <button 
+                        key={preset.key}
+                        type="button"
+                        onClick={() => setReportPreset(preset.key)}
+                        className={`py-1 rounded text-center uppercase border transition-all ${reportPreset === preset.key ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {reportPreset === "custom" && (
+                    <div className="grid grid-cols-2 gap-1.5 pt-1">
+                      <div>
+                        <span className="text-[8px] font-black text-stone-400 uppercase">From:</span>
+                        <input type="date" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
+                      </div>
+                      <div>
+                        <span className="text-[8px] font-black text-stone-400 uppercase">To:</span>
+                        <input type="date" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
                       </div>
                     </div>
-                  </>
-                )}
+                  )}
 
-                {/* RECENT HISTORIC BILL LOGS */}
+                  <div className="flex justify-between items-center pt-1 border-t">
+                    <span className="text-xs font-bold text-stone-800">Valid Bills: <span className="font-mono text-amber-600 font-black">{filteredReportBills.length}</span></span>
+                    <button 
+                      type="button" 
+                      onClick={handlePrintDateRangeReport} 
+                      className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded text-xs uppercase flex items-center gap-1 shadow-xs"
+                    >
+                      <i className="fa-solid fa-print"></i> Print Report
+                    </button>
+                  </div>
+
+                  {/* Passcode Prompt for Original Amounts */}
+                  {!isVerified && (
+                    <div className="bg-amber-50 border border-amber-200 rounded p-2 text-center space-y-1.5">
+                      <div className="text-[10px] font-extrabold text-amber-900 uppercase">Enter Passcode 'ab' for Original Values</div>
+                      <div className="flex justify-center items-center gap-1">
+                        <input 
+                          type="password" 
+                          placeholder="Passcode..." 
+                          value={passwordInput}
+                          onChange={(e) => {
+                            setPasswordInput(e.target.value);
+                            if (e.target.value === "ab") setIsVerified(true);
+                          }}
+                          className="w-28 text-center p-1 border border-amber-400 rounded text-xs font-mono font-bold bg-white focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ON-SCREEN REPORT DISPLAY */}
+                  <div className="mt-2 pt-2 border-t border-dashed border-stone-300">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider mb-1">Breakdown ({reportPreset.toUpperCase()})</span>
+                    {filteredReportBills.length === 0 ? (
+                      <div className="text-center text-[10px] text-stone-400 py-2 italic">No registered customer bills in this period.</div>
+                    ) : (
+                      <div className="max-h-40 overflow-y-auto custom-scroll border rounded bg-stone-50 p-1.5 text-xs font-mono">
+                        <table className="w-full text-left">
+                          <thead>
+                            <tr className="border-b text-[9px] text-stone-500 uppercase font-sans font-bold">
+                              <th className="pb-1">Date</th>
+                              <th className="pb-1">Customer</th>
+                              <th className="pb-1 text-right">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-200">
+                            {filteredReportBills.map((b, i) => {
+                              const amtVal = getTxnAmount(b);
+                              const amtDisplay = isVerified ? `₹${Math.round(amtVal)}` : encodeKanpurcity(amtVal);
+
+                              return (
+                                <tr key={i} className="text-[10px]">
+                                  <td className="py-1 text-stone-500">{getTxnDate(b) || "—"}</td>
+                                  <td className="py-1 font-bold uppercase text-stone-900 truncate max-w-[120px]">{getTxnName(b)}</td>
+                                  <td className="py-1 text-right font-black tracking-wide">{amtDisplay}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        <div className="mt-2 pt-1 border-t-2 border-stone-800 flex justify-between font-black text-xs text-stone-950">
+                          <span>Total Revenue:</span>
+                          <span className="font-mono tracking-wide">
+                            {isVerified ? `₹${Math.round(filteredReportBills.reduce((acc, b) => acc + getTxnAmount(b), 0))}` : encodeKanpurcity(filteredReportBills.reduce((acc, b) => acc + getTxnAmount(b), 0))}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* RECENT HISTORIC BILL LOGS WITH RESTORED PREVIEW TOGGLE BUTTON */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0 flex-1">
                   <div className="flex justify-between items-center border-b pb-1">
-                    <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">Recent Transactions (Recent First)</span>
-                    <span className="text-[9px] text-stone-400 font-mono">Total Bills: {cloudBills.length}</span>
+                    <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">
+                      Recent Transactions ({isVerified ? 'Showing 12' : 'Showing 2'})
+                    </span>
+                    <span className="text-[9px] text-stone-400 font-mono">Total: {cloudBills.length}</span>
                   </div>
 
                   <div className="space-y-1.5">
@@ -2501,12 +2478,13 @@
                       return (
                         <div key={bId} className="border bg-white rounded-lg p-2 text-xs space-y-1 animate-slide-up shadow-xs">
                           <div className="flex justify-between font-bold">
-                            <span className="uppercase text-stone-950 truncate max-w-[180px]">{bName} ({bCity && bCity.toLowerCase() !== "local" ? getCityCode(bCity) : "LOCA"})</span>
+                            <span className="uppercase text-stone-950 truncate max-w-[180px]">{bName} ({bCity && String(bCity).toLowerCase() !== "local" ? getCityCode(bCity) : "LOCA"})</span>
                             <span className="font-mono text-stone-800 font-black">₹{Math.round(bAmt)}</span>
                           </div>
                           <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
                             <span>{b.formattedDateTime || bDate}</span>
                             <div className="flex items-center gap-1 flex-wrap">
+                              {/* RESTORED PREVIEW BUTTON */}
                               <button 
                                 type="button"
                                 onClick={() => toggleLogItemPreview(bId)}
@@ -2546,7 +2524,7 @@
                             </div>
                           </div>
 
-                          {/* Collapsible Log Preview */}
+                          {/* RESTORED COLLAPSIBLE LOG PREVIEW */}
                           {visibleLogPreviews[bId] && (
                             <div className="mt-2 p-2.5 bg-stone-50 border rounded text-left font-mono text-[10px] leading-tight animate-slide-up">
                               <div className="text-center border-b border-dashed border-stone-400 pb-1 mb-1 font-bold">RECEIPT PREVIEW</div>
@@ -2564,13 +2542,13 @@
                                     <React.Fragment key={index}>
                                       <tr className="border-b border-stone-200/50">
                                         <td className="text-center font-bold">{Math.round(item.qty || 1)}</td>
-                                        <td className="uppercase font-bold">{item.name}</td>
+                                        <td className="uppercase font-bold">{item.name || "Item"}</td>
                                         <td className="text-right">{Math.round(item.finalUnitPrice || item.rate || item.basePrice || 0)}</td>
                                         <td className="text-right font-bold">{Math.round(getItemTotalAmount(item))}</td>
                                       </tr>
                                       {(index + 1) % 5 === 0 && index !== parseItemsSafely(getTxnItems(b)).length - 1 && (
                                         <tr>
-                                          <td colspan="4" className="py-0.5 border-b border-dotted border-stone-400"></td>
+                                          <td colSpan="4" className="py-0.5 border-b border-dotted border-stone-400"></td>
                                         </tr>
                                       )}
                                     </React.Fragment>
