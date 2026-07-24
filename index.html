@@ -1,4 +1,3 @@
-```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -105,7 +104,40 @@
 
     const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
 
-    // Persistent deleted product keys to prevent re-appearance during cloud sync
+    // Helper to safely parse items whether array or JSON string from Sheets
+    const parseItemsSafely = (itemsData) => {
+      if (!itemsData) return [];
+      if (Array.isArray(itemsData)) return itemsData;
+      if (typeof itemsData === 'string') {
+        try {
+          const parsed = JSON.parse(itemsData);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (e) {
+          console.warn("Failed to parse items string:", e);
+          return [];
+        }
+      }
+      return [];
+    };
+
+    // Helper to extract item total safely and accurately
+    const getItemTotalAmount = (item) => {
+      if (item.totalAmount !== undefined && !isNaN(parseFloat(item.totalAmount)) && parseFloat(item.totalAmount) > 0) {
+        return parseFloat(item.totalAmount);
+      }
+      if (item.amount !== undefined && !isNaN(parseFloat(item.amount)) && parseFloat(item.amount) > 0) {
+        return parseFloat(item.amount);
+      }
+      const q = parseFloat(item.qty) || 1;
+      const baseP = parseFloat(item.basePrice || item.rate || item.price || item.finalUnitPrice || 0);
+      const lessP = parseFloat(item.less) || 0;
+      const finalP = item.finalUnitPrice !== undefined && !isNaN(parseFloat(item.finalUnitPrice)) 
+        ? parseFloat(item.finalUnitPrice) 
+        : Math.max(0, baseP - lessP);
+      return q * finalP;
+    };
+
+    // Persistent deleted product keys filter
     const getDeletedProductKeys = () => {
       try {
         return JSON.parse(localStorage.getItem("deletedProductKeys") || "[]");
@@ -237,6 +269,17 @@
       customers: [],
       
       saveBillToCloudWithNumericId: async (numericId, bill, isEdit, targetUrl = DEFAULT_SCRIPT_URL) => {
+        // Clean and simplify items array before sending
+        const cleanItems = (bill.items || []).map(item => ({
+          qty: parseFloat(item.qty) || 1,
+          name: item.name || "Item",
+          code: (item.code && item.code !== "—") ? item.code : "",
+          basePrice: parseFloat(item.basePrice || item.rate || item.price || 0),
+          less: String(item.less !== undefined && item.less !== null ? item.less : "10"),
+          finalUnitPrice: parseFloat(item.finalUnitPrice || 0),
+          totalAmount: getItemTotalAmount(item)
+        }));
+
         const payload = {
           action: isEdit ? 'updateTxn' : 'addTxn',
           txn: {
@@ -247,7 +290,7 @@
             type: "bill",
             remarks: ""
           },
-          items: bill.items,
+          items: cleanItems,
           customer: {
             name: bill.customerName,
             city: bill.customerCity || "Local",
@@ -256,7 +299,13 @@
           }
         };
 
-        await idbStorage.saveBill(bill, !navigator.onLine);
+        const localBillObj = {
+          ...bill,
+          items: cleanItems,
+          localUpdatedAt: Date.now()
+        };
+
+        await idbStorage.saveBill(localBillObj, !navigator.onLine);
 
         if (!navigator.onLine) {
           throw new Error("Offline - Saved locally");
@@ -269,9 +318,9 @@
             headers: { "Content-Type": "text/plain" },
             body: JSON.stringify(payload)
           });
-          await idbStorage.saveBill(bill, false);
+          await idbStorage.saveBill(localBillObj, false);
         } catch (err) {
-          await idbStorage.saveBill(bill, true);
+          await idbStorage.saveBill(localBillObj, true);
           throw err;
         }
         return { id: String(numericId) };
@@ -370,19 +419,33 @@
       const [lastBalanceAmount, setLastBalanceAmount] = useState(0);
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
 
-      // Printable & App Settings State
-      const [printSettings, setPrintSettings] = useState({
-        showName: true,
-        showCity: true,
-        showDate: true,
-        showTime: true,
-        fontSize: '24',
-        fontFamily: 'Courier Prime',
-        rowSpacing: '8',
-        colSpacing: '4',
-        secondarySheetUrl: DEFAULT_SCRIPT_URL,
-        enableInlineAutocomplete: true
+      // Printable & App Settings State (Persisted in localStorage)
+      const [printSettings, setPrintSettings] = useState(() => {
+        try {
+          const saved = localStorage.getItem("roughBillPrintSettings");
+          if (saved) return JSON.parse(saved);
+        } catch (e) {}
+        return {
+          showName: true,
+          showCity: true,
+          showDate: true,
+          showTime: true,
+          fontSize: '24',
+          fontFamily: 'Courier Prime',
+          rowSpacing: '8',
+          colSpacing: '4',
+          primarySheetUrl: DEFAULT_SCRIPT_URL,
+          lastBalanceSheetUrl: DEFAULT_SCRIPT_URL,
+          enableInlineAutocomplete: true,
+          footerMessage: "Thank You For Your Visit\nPlease Visit Again"
+        };
       });
+
+      useEffect(() => {
+        try {
+          localStorage.setItem("roughBillPrintSettings", JSON.stringify(printSettings));
+        } catch (e) {}
+      }, [printSettings]);
 
       // Date Range Report States
       const [reportPreset, setReportPreset] = useState("last7");
@@ -392,7 +455,8 @@
       const custRef = useRef(null);
       const parserRef = useRef(null);
 
-      const activeScriptUrl = printSettings.secondarySheetUrl || DEFAULT_SCRIPT_URL;
+      const activeScriptUrl = printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL;
+      const lastBalScriptUrl = printSettings.lastBalanceSheetUrl || activeScriptUrl;
 
       const triggerNotification = (msg) => {
         setNotification(msg);
@@ -402,7 +466,7 @@
       const getNormalizedKey = (str) => str ? str.toLowerCase().trim().replace(/\s+/g, ' ') : "";
       const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
-      // Fetch customer's last remaining balance in background without freezing UI
+      // Fetch customer's last remaining balance in background
       const fetchLastBalanceInBackground = (nameVal) => {
         if (!nameVal || nameVal.trim() === "") {
           setLastBalanceAmount(0);
@@ -414,7 +478,6 @@
           if (data && data.balance !== undefined) {
             setLastBalanceAmount(parseFloat(data.balance) || 0);
           } else if (data && data.customers) {
-            // Find in customer object/array
             let custObj = null;
             if (Array.isArray(data.customers)) {
               custObj = data.customers.find(c => c && c.name && getNormalizedKey(c.name) === getNormalizedKey(nameVal));
@@ -432,7 +495,7 @@
 
         const script = document.createElement("script");
         script.id = callbackName;
-        script.src = `${activeScriptUrl}?action=getCustomerBalance&customer=${encodeURIComponent(nameVal.trim())}&callback=${callbackName}`;
+        script.src = `${lastBalScriptUrl}?action=getCustomerBalance&customer=${encodeURIComponent(nameVal.trim())}&callback=${callbackName}`;
         script.onerror = () => {
           setIsFetchingLastBalance(false);
           script.remove();
@@ -441,7 +504,6 @@
         document.body.appendChild(script);
       };
 
-      // Trigger background balance fetch when check field is toggled OR customer selected
       useEffect(() => {
         if (includeLastBalance && customerName.trim() !== "") {
           fetchLastBalanceInBackground(customerName);
@@ -544,22 +606,62 @@
               window.firebaseBridge.customers = parsedCustomers;
               idbStorage.cacheCustomers(parsedCustomers);
             }
+
             if (data.products) {
-              // Strictly filter out deleted / merged product keys
               const validProds = data.products.filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)));
               setCloudProducts(validProds);
               window.firebaseBridge.products = validProds;
               idbStorage.cacheProducts(validProds);
             }
+
             if (data.txns) {
-              const sortedTxns = [...data.txns].sort((a, b) => {
-                const timeA = a.id ? Number(a.id) : new Date(a.date || 0).getTime();
-                const timeB = b.id ? Number(b.id) : new Date(b.date || 0).getTime();
-                return timeB - timeA;
+              // MERGE REMOTE DATA WITH LOCAL BILLS SAFELY TO PREVENT DATA TRUNCATION/LOSS
+              setCloudBills(prevBills => {
+                const prevMap = new Map();
+                prevBills.forEach(b => prevMap.set(String(b.id), b));
+
+                const merged = data.txns.map(remoteTxn => {
+                  const remoteId = String(remoteTxn.id);
+                  const localTxn = prevMap.get(remoteId);
+                  const remoteItems = parseItemsSafely(remoteTxn.items);
+
+                  if (localTxn) {
+                    const localItems = parseItemsSafely(localTxn.items);
+                    const isRecentlySavedLocally = (Date.now() - (localTxn.localUpdatedAt || 0)) < 30000;
+                    if ((isRecentlySavedLocally || localItems.length > remoteItems.length) && localItems.length > 0) {
+                      return {
+                        ...remoteTxn,
+                        ...localTxn,
+                        items: localItems,
+                        totalAmount: localTxn.totalAmount || remoteTxn.totalAmount || remoteTxn.amount
+                      };
+                    }
+                  }
+
+                  return {
+                    ...remoteTxn,
+                    items: remoteItems,
+                    totalAmount: remoteTxn.totalAmount || remoteTxn.amount
+                  };
+                });
+
+                // Add local bills that haven't reached cloud yet
+                prevBills.forEach(localTxn => {
+                  if (!merged.some(m => String(m.id) === String(localTxn.id))) {
+                    merged.push(localTxn);
+                  }
+                });
+
+                const sortedTxns = merged.sort((a, b) => {
+                  const timeA = a.id ? Number(a.id) : new Date(a.date || 0).getTime();
+                  const timeB = b.id ? Number(b.id) : new Date(b.date || 0).getTime();
+                  return timeB - timeA;
+                });
+
+                window.firebaseBridge.bills = sortedTxns;
+                sortedTxns.forEach(b => idbStorage.saveBill(b, false));
+                return sortedTxns;
               });
-              setCloudBills(sortedTxns);
-              window.firebaseBridge.bills = sortedTxns;
-              sortedTxns.forEach(b => idbStorage.saveBill(b, false));
             }
           }
           document.getElementById(callbackName)?.remove();
@@ -644,26 +746,29 @@
         }, 100);
       };
 
+      // FULL HISTORICAL BILL LOADING FIX (Retains ALL items & ensures unique string IDs)
       const handleLoadHistoricalBill = (historicalBillObj) => {
         setCustomerName(historicalBillObj.customerName || historicalBillObj.name || "");
         setCustomerCity(historicalBillObj.customerCity || historicalBillObj.city || "");
         setDiscountX(String(historicalBillObj.discountRate || historicalBillObj.discount || 0));
         setBillDate(historicalBillObj.date ? historicalBillObj.date.split(' ')[0] : new Date().toISOString().split('T')[0]);
         
-        const rawItems = historicalBillObj.items || [];
+        const rawItems = parseItemsSafely(historicalBillObj.items);
         const normalized = rawItems.map((i, idx) => {
           const qtyVal = parseFloat(i.qty) || 1;
           const priceVal = parseFloat(i.basePrice || i.rate || i.price || i.finalUnitPrice || 0);
-          const lessVal = (i.less !== undefined && i.less !== null && i.less !== "—") ? String(i.less) : "—";
+          const lessVal = (i.less !== undefined && i.less !== null && i.less !== "—") ? String(i.less) : "10";
           const deduct = (lessVal !== "—" && !isNaN(parseFloat(lessVal))) ? parseFloat(lessVal) : 0;
-          const finalPrice = i.finalUnitPrice !== undefined ? parseFloat(i.finalUnitPrice) : Math.max(0, priceVal - deduct);
-          const totalAmt = i.totalAmount !== undefined ? parseFloat(i.totalAmount) : (parseFloat(i.amount) || (qtyVal * finalPrice));
+          const finalPrice = i.finalUnitPrice !== undefined && !isNaN(parseFloat(i.finalUnitPrice))
+            ? parseFloat(i.finalUnitPrice) 
+            : Math.max(0, priceVal - deduct);
+          const totalAmt = getItemTotalAmount(i);
 
           return {
-            id: i.id || (Date.now() + Math.random() + idx),
+            id: 'loaded_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).substring(2, 7),
             qty: qtyVal,
             name: i.name || "Item",
-            code: (i.code && i.code !== "—") ? i.code : "—",
+            code: (i.code && i.code !== "—" && i.code !== "") ? i.code : "—",
             basePrice: priceVal,
             less: lessVal,
             finalUnitPrice: finalPrice,
@@ -674,7 +779,7 @@
         setBaggedItems(normalized);
         setEditingBillId(String(historicalBillObj.id) || null);
         setCurrentTab("bill");
-        triggerNotification("Historical bill loaded into bag!");
+        triggerNotification(`✓ Loaded bill with all ${normalized.length} item(s)!`);
       };
 
       const calculateRateForToken = (codeStr, rawX) => {
@@ -695,16 +800,33 @@
         return !isNaN(parseFloat(cleanCode)) ? parseFloat(cleanCode) : 0;
       };
 
-      // Alphabetical Product Catalog List
-      const alphabetizedProducts = useMemo(() => {
+      // SORT DIRECTORY SHORTCUTS BY MOST TYPED / FREQUENTLY BILLED ITEMS FIRST
+      const mostTypedProducts = useMemo(() => {
         if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
         const deletedKeys = getDeletedProductKeys();
+
+        const counts = {};
+        cloudBills.forEach(b => {
+          const items = parseItemsSafely(b.items);
+          items.forEach(i => {
+            if (i && i.name) {
+              const k = getNormalizedKey(i.name);
+              counts[k] = (counts[k] || 0) + (parseFloat(i.qty) || 1);
+            }
+          });
+        });
+
         return [...cloudProducts]
           .filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)))
-          .sort((a, b) => (a.name || "").localeCompare((b.name || ""), undefined, { sensitivity: 'base', numeric: true }));
-      }, [cloudProducts]);
+          .sort((a, b) => {
+            const countA = counts[getNormalizedKey(a.name)] || 0;
+            const countB = counts[getNormalizedKey(b.name)] || 0;
+            if (countB !== countA) return countB - countA;
+            return (a.name || "").localeCompare((b.name || ""), undefined, { sensitivity: 'base' });
+          });
+      }, [cloudProducts, cloudBills]);
 
-      // Calculate Inline Autocomplete Ghost Text Position & Suffix
+      // Inline Autocomplete Suggestion Calculation
       const autocompleteSuggestion = useMemo(() => {
         if (!printSettings.enableInlineAutocomplete || !parserInput.trim()) return "";
         const trimmed = parserInput.trimStart();
@@ -712,20 +834,19 @@
         const typedText = match ? match[2].trim() : trimmed;
         if (!typedText) return "";
 
-        const candidate = alphabetizedProducts.find(p => p.name.toLowerCase().startsWith(typedText.toLowerCase()));
+        const candidate = mostTypedProducts.find(p => p.name.toLowerCase().startsWith(typedText.toLowerCase()));
         if (candidate && candidate.name.toLowerCase() !== typedText.toLowerCase()) {
           return candidate.name.slice(typedText.length);
         }
         return "";
-      }, [parserInput, alphabetizedProducts, printSettings.enableInlineAutocomplete]);
+      }, [parserInput, mostTypedProducts, printSettings.enableInlineAutocomplete]);
 
-      // FAST PARSER SUBMIT
+      // FAST PARSER SUBMIT (DEFAULT PER SKU LESS = 10)
       const handleParserSubmit = (e) => {
         e.preventDefault();
         let rawInput = parserInput.trim();
         if (!rawInput) return;
 
-        // Apply inline ghost text completion if user presses enter directly while ghost suggestion is present
         if (autocompleteSuggestion) {
           rawInput = rawInput + autocompleteSuggestion;
         }
@@ -796,15 +917,20 @@
           idbStorage.cacheProducts(updatedProds);
         }
 
+        // DEFAULT PER SKU LESS = 10 (No. 2 in requirement)
+        const defaultSkuLess = "10";
+        const deduct = 10;
+        const finalUnitPrice = Math.max(0, unitPrice - deduct);
+
         const newItem = {
-          id: Date.now() + Math.random(), 
+          id: 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9), 
           qty: parsedQty, 
           name: displayCasing, 
           code: codeValue,
           basePrice: unitPrice, 
-          less: "—", 
-          finalUnitPrice: unitPrice, 
-          totalAmount: parsedQty * unitPrice
+          less: defaultSkuLess, 
+          finalUnitPrice: finalUnitPrice, 
+          totalAmount: parsedQty * finalUnitPrice
         };
 
         setBaggedItems(prev => [newItem, ...prev]);
@@ -814,7 +940,7 @@
 
       const handleEditBaggedItem = (id, field, value) => {
         setBaggedItems(prev => prev.map(item => {
-          if (item.id === id) {
+          if (String(item.id) === String(id)) {
             const updated = { ...item };
             if (field === 'qty') updated.qty = parseFloat(value) || 0;
             if (field === 'name') updated.name = value;
@@ -840,7 +966,7 @@
         }));
       };
 
-      // Group Less Handler - Default fill pre-set to 15
+      // Group Less Handler - Default fill pre-set to 15 (No. 1 in requirement)
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
         const valToApply = lessValStr !== undefined && lessValStr !== "" ? lessValStr : "15";
         const amt = parseFloat(valToApply) || 0;
@@ -870,27 +996,28 @@
               items: []
             };
           }
+          const itemAmt = getItemTotalAmount(item);
           groups[key].items.push(item);
-          groups[key].totalQty += (item.qty || 0);
-          groups[key].totalAmount += (item.totalAmount || 0);
+          groups[key].totalQty += (parseFloat(item.qty) || 0);
+          groups[key].totalAmount += itemAmt;
         });
         return Object.values(groups);
       }, [baggedItems]);
 
       // Total Current Bill Liability Sum
       const currentBillTotalSum = useMemo(() => {
-        return baggedItems.reduce((acc, i) => acc + i.totalAmount, 0);
+        return baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
       }, [baggedItems]);
 
-      // Grand Total Balance (Bill Total + Included Last Balance)
+      // Grand Total Balance
       const grandFinalBalance = useMemo(() => {
         return Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0));
       }, [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // Renders receipts for printer/spool utilizing Print Settings & Included Last Balance
+      // Renders receipts for printer/spool
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
-        const total = itemsList.reduce((acc, i) => acc + i.totalAmount, 0);
+        const total = sortedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
 
         const headerDetails = [];
         if (printSettings.showName && custName) headerDetails.push(getThreeLetterCode(custName));
@@ -901,6 +1028,8 @@
         const fSizePx = `${printSettings.fontSize}px`;
         const rPadPx = `${printSettings.rowSpacing}px`;
         const cPadPx = `${printSettings.colSpacing}px`;
+
+        const footerLines = (printSettings.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
 
         let receiptHTML = `
           <div style="font-family: ${fontFamCss};" class="text-center pb-3 mb-3 border-b-4 border-black">
@@ -926,16 +1055,18 @@
 
         sortedItems.forEach((item, index) => {
           const rawCodeOnly = (item.code && item.code !== "—") ? item.code.trim() : "";
+          const itemAmt = getItemTotalAmount(item);
+          const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || item.price || 0);
 
           receiptHTML += `
             <tr class="align-top border-b border-stone-200">
-              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${Math.round(item.qty)}</td>
+              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${Math.round(item.qty || 1)}</td>
               <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="font-bold uppercase whitespace-pre-wrap break-all leading-tight">
                 <div>${item.name.trim().toUpperCase()}</div>
                 ${rawCodeOnly ? `<div style="font-size: ${Math.round(parseInt(printSettings.fontSize)*0.75)}px;" class="text-stone-700 font-normal tracking-wide">${rawCodeOnly}</div>` : ""}
               </td>
-              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(item.finalUnitPrice)}</td>
-              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(item.totalAmount)}</td>
+              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(unitP)}</td>
+              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(itemAmt)}</td>
             </tr>
           `;
 
@@ -953,7 +1084,7 @@
           </table>
           <div style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="mt-6 pt-3 border-t-4 border-dashed border-black text-right space-y-2 font-bold">
             <div class="flex justify-between font-black">
-              <span>Gross Bill Liability:</span>
+              <span>Bill Total:</span>
               <span>₹${Math.round(total)}</span>
             </div>
             ${includeLastBalance ? `
@@ -963,13 +1094,12 @@
               </div>
             ` : ""}
             <div style="font-size: ${Math.round(parseInt(printSettings.fontSize)*1.25)}px;" class="flex justify-between font-black border-t-4 border-black pt-2 mt-1">
-              <span>Net Final Total:</span>
+              <span>TOTAL:</span>
               <span>₹${Math.round(total + (includeLastBalance ? lastBalanceAmount : 0))}</span>
             </div>
           </div>
           <div style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="mt-10 text-center font-bold pt-4 border-t-2 border-black">
-            Thank You For Your Visit<br/>
-            Please Visit Again
+            ${footerLines.map(line => `<div>${line}</div>`).join('')}
           </div>
         `;
 
@@ -1214,6 +1344,7 @@
         }
       };
 
+      // Thermal BLE Print Command Generator (Robust Sum Calculations)
       const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
         if (!bleCharacteristic) return;
         const encoder = new TextEncoder();
@@ -1233,11 +1364,16 @@
         esc.push(0x1B, 0x61, 0x00); // Left align
         const sortedItems = [...itemsList].sort((a,b) => a.name.localeCompare(b.name));
         
+        let sumTotal = 0;
         sortedItems.forEach((item, index) => {
+          const itemAmt = getItemTotalAmount(item);
+          sumTotal += itemAmt;
+
           const nameStr = item.name.trim().toUpperCase().slice(0, 15);
-          const qStr = String(Math.round(item.qty)).padEnd(3);
-          const pStr = String(Math.round(item.finalUnitPrice)).padStart(4);
-          const totalStr = String(Math.round(item.totalAmount)).padStart(6);
+          const qStr = String(Math.round(item.qty || 1)).padEnd(3);
+          const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || 0);
+          const pStr = String(Math.round(unitP)).padStart(4);
+          const totalStr = String(Math.round(itemAmt)).padStart(6);
           
           esc.push(...encoder.encode(`${qStr} ${nameStr.padEnd(15)} ${pStr} ${totalStr}\n`));
           
@@ -1251,12 +1387,25 @@
         });
 
         esc.push(...encoder.encode("--------------------------------\n"));
+        let finalGrandTotal = sumTotal;
         if (includeLastBalance) {
-          esc.push(...encoder.encode(`BILL TOTAL:              ${Math.round(currentBillTotalSum)}\n`));
+          esc.push(...encoder.encode(`BILL TOTAL:              ${Math.round(sumTotal)}\n`));
           esc.push(...encoder.encode(`LAST BAL:                ${Math.round(lastBalanceAmount)}\n`));
+          finalGrandTotal += lastBalanceAmount;
         }
-        esc.push(...encoder.encode(`TOTAL LIABILITY:         ${grandFinalBalance}\n\n\n`));
-        esc.push(0x1D, 0x56, 0x42, 0x00); // Cut
+        esc.push(...encoder.encode(`TOTAL:                   ${Math.round(finalGrandTotal)}\n\n`));
+
+        // Custom Thank You Message
+        const footerLines = (printSettings.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
+        esc.push(0x1B, 0x61, 0x01); // Center
+        footerLines.forEach(line => {
+          if (line.trim()) {
+            esc.push(...encoder.encode(`${line.trim()}\n`));
+          }
+        });
+        esc.push(...encoder.encode("\n\n"));
+
+        esc.push(0x1D, 0x56, 0x42, 0x00); // Cut paper
 
         const bytes = new Uint8Array(esc);
         for (let i = 0; i < bytes.length; i += 20) {
@@ -1265,7 +1414,7 @@
       };
 
       const autocompleteQueryLocal = getParserAutocompleteQueryLocal();
-      const suggestionsLocal = autocompleteQueryLocal ? alphabetizedProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
+      const suggestionsLocal = autocompleteQueryLocal ? mostTypedProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
 
       const filteredSheetsCustomers = customerName.trim() === "" 
         ? [] 
@@ -1484,7 +1633,7 @@
                 />
               </div>
 
-              {/* Add Last Balance Check Field */}
+              {/* Include Last Balance Checkbox */}
               <label title="Include Customer's Last Balance" className={`px-1.5 py-1 h-10 rounded-lg border text-[9px] font-black uppercase flex items-center gap-1 cursor-pointer transition-colors ${includeLastBalance ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-stone-50 text-stone-500 border-stone-200'}`}>
                 <input 
                   type="checkbox" 
@@ -1507,11 +1656,11 @@
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-2 overflow-hidden min-h-0">
                 
-                {/* Product Directory Shortcuts (Alphabetical Order A-Z) */}
+                {/* Directory Shortcuts (Sorted by Most Typed First) */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Alphabetical Directory Shortcuts</span>
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Directory Shortcuts (Most Typed First)</span>
                   <div className="flex gap-1 overflow-x-auto pb-1 custom-scroll">
-                    {alphabetizedProducts.map(p => (
+                    {mostTypedProducts.map(p => (
                       <button key={p.id || p.name} type="button" onClick={() => {
                         setParserInput(prev => {
                           const m = prev.match(/^\d+(\.\d+)?\s+/);
@@ -1523,7 +1672,7 @@
                   </div>
                 </div>
 
-                {/* Fast Parser Entry Box with INLINE AUTOCOMPLETE GHOST TEXT & 1 Print Button */}
+                {/* Fast Parser Entry Box */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs relative flex-shrink-0">
                   <form onSubmit={handleParserSubmit} className="flex gap-1.5 items-center">
                     <div className="relative flex-grow">
@@ -1544,7 +1693,6 @@
                         }}
                         className="w-full px-3 py-2 h-11 text-xs bg-stone-50 border-2 border-stone-800 rounded-lg font-mono font-black focus:outline-none focus:bg-white text-stone-900 z-10 relative bg-transparent"
                       />
-                      {/* Inline Ghost Autocomplete Text Overlay */}
                       {printSettings.enableInlineAutocomplete && autocompleteSuggestion && (
                         <div className="absolute inset-0 px-3 py-2 h-11 text-xs font-mono font-black flex items-center pointer-events-none z-0 overflow-hidden whitespace-pre">
                           <span className="opacity-0">{parserInput}</span>
@@ -1589,7 +1737,7 @@
                         return (
                           <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-1.5 space-y-1.5 shadow-xs animate-slide-up">
                             
-                            {/* Single-Line Group Header: [ITEM NAME] [Total Qty] [Less: Input (Pre-filled 15)] [Apply] */}
+                            {/* Single-Line Group Header: [ITEM NAME] [Total Qty] [Less: Input (No. 1 Default 15)] [Apply] */}
                             <div className="bg-stone-900 text-white px-2 py-1.5 rounded-lg flex items-center justify-between gap-1 text-xs shadow-xs">
                               <div className="flex items-center gap-1.5 min-w-0 flex-shrink truncate">
                                 <span className="font-black text-xs uppercase tracking-wider text-amber-300 truncate">{group.displayName}</span>
@@ -1619,13 +1767,12 @@
                               </div>
                             </div>
 
-                            {/* Touch-Friendly Child Item Rows */}
+                            {/* Touch-Friendly Child Item Rows (No. 2 Default Less = 10) */}
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
                                 <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200">
                                   
                                   <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap font-mono flex-grow min-w-0">
-                                    {/* Touch-optimized Qty Input */}
                                     <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1.5 py-1 rounded h-9">
                                       <span className="text-[9px] font-black text-stone-400 uppercase">Q:</span>
                                       <input 
@@ -1638,7 +1785,6 @@
                                       />
                                     </div>
 
-                                    {/* Touch-optimized Code Input */}
                                     <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1.5 py-1 rounded h-9">
                                       <span className="text-[9px] font-black text-stone-400 uppercase">C:</span>
                                       <input 
@@ -1651,7 +1797,6 @@
                                       />
                                     </div>
 
-                                    {/* Touch-optimized Price Input */}
                                     <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1.5 py-1 rounded h-9">
                                       <span className="text-[9px] font-black text-stone-400 uppercase">P:</span>
                                       <input 
@@ -1664,13 +1809,12 @@
                                       />
                                     </div>
 
-                                    {/* Touch-optimized Less Input */}
                                     <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1.5 py-1 rounded h-9">
                                       <span className="text-[9px] font-black text-rose-500 uppercase">L:</span>
                                       <input 
                                         type="text" 
                                         inputMode="decimal"
-                                        placeholder="0" 
+                                        placeholder="10" 
                                         value={item.less === "—" ? "" : item.less} 
                                         onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
@@ -1679,11 +1823,11 @@
                                     </div>
 
                                     <div className="flex-grow text-right font-black text-stone-900 text-xs pr-1">
-                                      ₹{Math.round(item.totalAmount)}
+                                      ₹{Math.round(getItemTotalAmount(item))}
                                     </div>
                                   </div>
 
-                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => i.id !== item.id))} className="text-stone-400 hover:text-rose-600 px-1.5 text-base flex-shrink-0 h-9 flex items-center justify-center">
+                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1.5 text-base flex-shrink-0 h-9 flex items-center justify-center">
                                     <i className="fa-solid fa-xmark"></i>
                                   </button>
 
@@ -1695,7 +1839,7 @@
                         );
                       })}
 
-                      {/* Grand Total Summary Card including Included Last Balance */}
+                      {/* Grand Total Summary Card */}
                       <div className="bg-white p-2.5 border rounded-xl space-y-1 shadow-xs font-sans text-xs">
                         <div className="flex justify-between items-center text-stone-600 font-bold">
                           <span>Current Bill Amount:</span>
@@ -1713,7 +1857,7 @@
                         )}
 
                         <div className="flex justify-between items-center pt-1 border-t-2 border-stone-900 font-black text-stone-950">
-                          <span className="uppercase tracking-wider">Final Total Liability:</span>
+                          <span className="uppercase tracking-wider">TOTAL:</span>
                           <span className="font-mono text-base text-amber-600 font-black">₹{grandFinalBalance}</span>
                         </div>
                       </div>
@@ -1751,13 +1895,13 @@
                                 {[...baggedItems].sort((a,b) => a.name.localeCompare(b.name)).map((item, idx) => (
                                   <React.Fragment key={idx}>
                                     <tr className="align-top border-b border-stone-100">
-                                      <td className="text-center font-bold">{Math.round(item.qty)}</td>
+                                      <td className="text-center font-bold">{Math.round(item.qty || 1)}</td>
                                       <td className="uppercase font-bold">
                                         {item.name}
                                         {item.code && item.code !== "—" && <span className="block text-[8px] text-stone-600 font-mono font-normal">{item.code.trim()}</span>}
                                       </td>
                                       <td className="text-right">{Math.round(item.finalUnitPrice)}</td>
-                                      <td className="text-right font-bold">{Math.round(item.totalAmount)}</td>
+                                      <td className="text-right font-bold">{Math.round(getItemTotalAmount(item))}</td>
                                     </tr>
                                     {(idx + 1) % 5 === 0 && idx !== baggedItems.length - 1 && (
                                       <tr>
@@ -1772,7 +1916,7 @@
                             <div className="mt-2 pt-1.5 border-t border-dashed border-black text-right text-[10px] font-bold space-y-0.5">
                               <div>Bill Total: ₹{Math.round(currentBillTotalSum)}</div>
                               {includeLastBalance && <div>Last Balance: ₹{Math.round(lastBalanceAmount)}</div>}
-                              <div className="border-t pt-1 font-black text-[11px]">Final Total: ₹{grandFinalBalance}</div>
+                              <div className="border-t pt-1 font-black text-[11px]">TOTAL: ₹{grandFinalBalance}</div>
                             </div>
                           </div>
                         )}
@@ -1787,8 +1931,6 @@
             {/* CATALOG & MERGE PRODUCTS TAB */}
             {currentTab === "products" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
-                
-                {/* Add New Catalog Product */}
                 <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0 shadow-xs">
                   <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Add New Directory Item</span>
                   <input 
@@ -1821,7 +1963,7 @@
                       />
                       {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
                         <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 mt-1">
-                          {alphabetizedProducts
+                          {mostTypedProducts
                             .filter(p => getNormalizedKey(p.name) !== getNormalizedKey(selectedCatalogProduct.name) && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
                             .slice(0, 5)
                             .map(p => (
@@ -1847,7 +1989,7 @@
                           triggerNotification("Please select/search a target product.");
                           return;
                         }
-                        const targetItem = alphabetizedProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
+                        const targetItem = mostTypedProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
                         if (!targetItem) {
                           triggerNotification("Target product must exist in catalog.");
                           return;
@@ -1856,7 +1998,6 @@
                         const oldName = selectedCatalogProduct.name;
                         const oldKey = getNormalizedKey(oldName);
 
-                        // Permanently add to persistent deleted keys filter
                         addDeletedProductKey(oldKey);
 
                         try {
@@ -1884,7 +2025,7 @@
 
                 {/* Filter Product Catalog */}
                 <div className="bg-white p-2 border rounded-xl space-y-1 shadow-xs">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory (Alphabetical)</span>
+                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
                   <input 
                     type="text" 
                     placeholder="Filter products list..." 
@@ -1896,7 +2037,7 @@
 
                 {/* Catalog List */}
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs">
-                  {alphabetizedProducts
+                  {mostTypedProducts
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
                     .map(p => (
                       <div 
@@ -1948,7 +2089,7 @@
                   </div>
                 ) : (
                   <>
-                    {/* DATE RANGE REPORT GENERATOR & ON-SCREEN SUMMARY */}
+                    {/* DATE RANGE REPORT GENERATOR */}
                     <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
                       <div className="flex justify-between items-center border-b pb-1">
                         <span className="text-[10px] font-black uppercase text-stone-500">Date Range Ledger Report</span>
@@ -2098,15 +2239,15 @@
                                 </tr>
                               </thead>
                               <tbody>
-                                {(b.items || []).map((item, index) => (
+                                {parseItemsSafely(b.items).map((item, index) => (
                                   <React.Fragment key={index}>
                                     <tr className="border-b border-stone-200/50">
-                                      <td className="text-center font-bold">{Math.round(item.qty)}</td>
+                                      <td className="text-center font-bold">{Math.round(item.qty || 1)}</td>
                                       <td className="uppercase font-bold">{item.name}</td>
-                                      <td className="text-right">{Math.round(item.finalUnitPrice || item.rate || item.basePrice)}</td>
-                                      <td className="text-right font-bold">{Math.round(item.totalAmount || item.amount)}</td>
+                                      <td className="text-right">{Math.round(item.finalUnitPrice || item.rate || item.basePrice || 0)}</td>
+                                      <td className="text-right font-bold">{Math.round(getItemTotalAmount(item))}</td>
                                     </tr>
-                                    {(index + 1) % 5 === 0 && index !== (b.items || []).length - 1 && (
+                                    {(index + 1) % 5 === 0 && index !== parseItemsSafely(b.items).length - 1 && (
                                       <tr>
                                         <td colspan="4" className="py-0.5 border-b border-dotted border-stone-400"></td>
                                       </tr>
@@ -2116,7 +2257,7 @@
                               </tbody>
                             </table>
                             <div className="text-right font-black border-t border-dashed border-stone-400 pt-1 mt-1 text-stone-950">
-                              Grand Total: ₹{Math.round(b.totalAmount || b.amount || 0)}
+                              TOTAL: ₹{Math.round(b.totalAmount || b.amount || 0)}
                             </div>
                           </div>
                         )}
@@ -2136,17 +2277,46 @@
                     <i className="fa-solid fa-sliders text-amber-500"></i> Printer & Receipt Settings
                   </h3>
 
-                  {/* Secondary Sheet URL Option */}
+                  {/* Primary Yearly Sheet URL Switcher */}
                   <div className="space-y-1">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Secondary / Last Balance Sheet Script URL</span>
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Primary Sheet Script URL (Switch Yearly)</span>
                     <input 
                       type="url" 
                       placeholder="https://script.google.com/macros/s/.../exec"
-                      value={printSettings.secondarySheetUrl}
-                      onChange={(e) => setPrintSettings({ ...printSettings, secondarySheetUrl: e.target.value })}
+                      value={printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL}
+                      onChange={(e) => setPrintSettings({ ...printSettings, primarySheetUrl: e.target.value })}
                       className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
                     />
-                    <span className="block text-[8px] text-stone-400 italic">Leaves active Apps Script URL or fetches last balance from archive sheet.</span>
+                    <div className="flex justify-between text-[8px] text-stone-400">
+                      <span>Paste new Apps Script URL here when creating new yearly sheets.</span>
+                      <button type="button" onClick={() => setPrintSettings({ ...printSettings, primarySheetUrl: DEFAULT_SCRIPT_URL })} className="text-amber-700 underline font-bold">Reset Default</button>
+                    </div>
+                  </div>
+
+                  {/* Last Balance Fetching Sheet URL */}
+                  <div className="space-y-1 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Last Balance Fetch Sheet URL</span>
+                    <input 
+                      type="url" 
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      value={printSettings.lastBalanceSheetUrl || activeScriptUrl}
+                      onChange={(e) => setPrintSettings({ ...printSettings, lastBalanceSheetUrl: e.target.value })}
+                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
+                    />
+                    <span className="block text-[8px] text-stone-400 italic">URL used specifically to query previous customer balances.</span>
+                  </div>
+
+                  {/* Custom Thank You Message */}
+                  <div className="space-y-1 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Custom Receipt Thank You Message</span>
+                    <textarea 
+                      rows="2"
+                      placeholder="Thank You For Your Visit..."
+                      value={printSettings.footerMessage}
+                      onChange={(e) => setPrintSettings({ ...printSettings, footerMessage: e.target.value })}
+                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
+                    ></textarea>
+                    <span className="block text-[8px] text-stone-400 italic">Appears at the bottom of printed receipts, images, and previews.</span>
                   </div>
 
                   {/* Autocomplete Toggle */}
@@ -2308,4 +2478,3 @@
 </body>
 </html>
 
-```
