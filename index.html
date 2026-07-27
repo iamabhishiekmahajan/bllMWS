@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Rough Bill Generator Sheets Pro</title>
   
+  <!-- PWA Manifest & Meta Tags -->
+  <link rel="manifest" href='data:application/manifest+json,{"name":"Rough Bill Generator","short_name":"RoughBill","start_url":".","display":"standalone","background_color":"#f5f5f4","theme_color":"#1c1917","icons":[{"src":"https://cdn-icons-png.flaticon.com/512/1052/1052866.png","sizes":"512x512","type":"image/png"}]}'>
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1c1917">
+
   <!-- CDNs -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -31,56 +37,29 @@
   </script>
   <style>
     html, body {
-      position: fixed;
-      width: 100%;
-      height: 100dvh;
-      overflow: hidden;
-      background-color: #f5f5f4;
-      margin: 0;
-      padding: 0;
+      position: fixed; width: 100%; height: 100dvh; overflow: hidden;
+      background-color: #f5f5f4; margin: 0; padding: 0;
     }
     #printable-bill-invoice { display: none; }
     #image-export-container {
-      position: absolute;
-      left: -9999px;
-      top: 0;
-      width: 320px;
-      background: #ffffff;
-      color: #000000;
-      padding: 12px;
-      box-sizing: border-box;
-      z-index: -50;
+      position: absolute; left: -9999px; top: 0; width: 320px;
+      background: #ffffff; color: #000000; padding: 12px;
+      box-sizing: border-box; z-index: -50;
     }
     @media print {
-      @page {
-        size: A4;
-        margin: 5mm 2mm 5mm 2mm !important;
-      }
+      @page { size: A4; margin: 5mm 2mm 5mm 2mm !important; }
       html, body {
-        position: relative !important;
-        width: 210mm !important;
-        height: auto !important;
-        overflow: visible !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        background: #fff !important;
-        color: #000 !important;
-        font-family: 'Courier Prime', monospace !important;
-        -webkit-print-color-adjust: exact;
+        position: relative !important; width: 210mm !important; height: auto !important;
+        overflow: visible !important; margin: 0 !important; padding: 0 !important;
+        background: #fff !important; color: #000 !important;
+        font-family: 'Courier Prime', monospace !important; -webkit-print-color-adjust: exact;
       }
       body * { visibility: hidden !important; }
       #printable-bill-invoice, #printable-bill-invoice * { visibility: visible !important; }
       #printable-bill-invoice {
-        display: block !important;
-        position: absolute !important;
-        left: 0 !important;
-        top: 0 !important;
-        width: 206mm !important;
-        height: auto !important;
-        overflow: visible !important;
-        margin: 0 !important;
-        padding: 2mm 0mm !important;
-        box-sizing: border-box !important;
+        display: block !important; position: absolute !important; left: 0 !important; top: 0 !important;
+        width: 206mm !important; height: auto !important; overflow: visible !important;
+        margin: 0 !important; padding: 2mm 0mm !important; box-sizing: border-box !important;
       }
     }
     .custom-scroll::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -89,15 +68,27 @@
     input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     input[type=number] { -moz-appearance: textfield; }
     @keyframes slideInUp {
-      from { transform: translateY(10px); opacity: 0; }
+      from { transform: translateY(8px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
-    .animate-slide-up { animation: slideInUp 0.18s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+    .animate-slide-up { animation: slideInUp 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
   </style>
 </head>
 <body class="text-stone-900 font-sans antialiased selection:bg-stone-300 bg-stone-100">
   <div id="root" class="h-[100dvh] w-full flex flex-col overflow-hidden"></div>
   <div id="image-export-container"></div>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      const swCode = `
+        self.addEventListener('install', e => self.skipWaiting());
+        self.addEventListener('activate', e => self.clients.claim());
+        self.addEventListener('fetch', e => e.respondWith(fetch(e.request).catch(() => caches.match(e.request))));
+      `;
+      const blob = new Blob([swCode], { type: 'text/javascript' });
+      navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(() => {});
+    }
+  </script>
 
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo } = React;
@@ -105,7 +96,7 @@
     const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
     const DEFAULT_LAST_BAL_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
 
-    // Case-Insensitive Property Extractors
+    // Case-Insensitive Helpers
     const getTxnName = (t) => t ? String(t.name || t.Name || t.customerName || t.CustomerName || t.Customer || t.customer || "") : "";
     const getTxnAmount = (t) => {
       if (!t) return 0;
@@ -117,15 +108,34 @@
     const getTxnItems = (t) => t ? (t.items || t.Items || []) : [];
     const getTxnId = (t) => t ? String(t.id || t.Id || t['#'] || "") : "";
 
-    // Cipher Encoding helper: KANPURCITY (K=1, A=2, N=3, P=4, U=5, R=6, C=7, I=8, T=9, Y=0)
-    const encodeKanpurcity = (num) => {
-      if (num === undefined || num === null || isNaN(num) || num <= 0) return "Y";
-      const cipherMap = { '1':'K', '2':'A', '3':'N', '4':'P', '5':'U', '6':'R', '7':'C', '8':'I', '9':'T', '0':'Y' };
+    // CUSTOM CIPHER ENCODER: 1500 -> 1uyy, 11 -> 1k
+    const encodeCustomCipher = (num) => {
+      if (num === undefined || num === null || isNaN(num) || num <= 0) return "0";
+      const cipherMap = { '0':'y', '1':'k', '2':'a', '3':'n', '4':'p', '5':'u', '6':'r', '7':'c', '8':'i', '9':'t' };
       const str = String(Math.round(num));
-      return str.split('').map(d => cipherMap[d] || d).join('');
+      if (str.length === 1) return str;
+      const firstDigit = str[0];
+      const rest = str.slice(1).split('').map(d => cipherMap[d] || d).join('');
+      return firstDigit + rest;
     };
 
-    // Safe items parser
+    // Append JI to customer name if missing
+    const formatCustomerNameJI = (name) => {
+      if (!name || !name.trim()) return "WALK-IN CUSTOMER JI";
+      const trimmed = name.trim().toUpperCase();
+      if (trimmed.endsWith(" JI") || trimmed.endsWith("JI")) return trimmed;
+      return `${trimmed} JI`;
+    };
+
+    // Format Date as DD/MM
+    const formatDDMM = (dateStr) => {
+      const d = dateStr ? new Date(dateStr) : new Date();
+      if (isNaN(d.getTime())) return "";
+      const day = String(d.getDate()).padStart(2, '0');
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      return `${day}/${month}`;
+    };
+
     const parseItemsSafely = (itemsData) => {
       if (!itemsData) return [];
       if (Array.isArray(itemsData)) return itemsData;
@@ -133,15 +143,11 @@
         try {
           const parsed = JSON.parse(itemsData);
           return Array.isArray(parsed) ? parsed : [];
-        } catch (e) {
-          console.warn("Failed to parse items string:", e);
-          return [];
-        }
+        } catch (e) { return []; }
       }
       return [];
     };
 
-    // Item total calculator
     const getItemTotalAmount = (item) => {
       if (!item) return 0;
       if (item.totalAmount !== undefined && !isNaN(parseFloat(item.totalAmount)) && parseFloat(item.totalAmount) > 0) {
@@ -159,13 +165,8 @@
       return q * finalP;
     };
 
-    // Persistent deleted product keys filter
     const getDeletedProductKeys = () => {
-      try {
-        return JSON.parse(localStorage.getItem("deletedProductKeys") || "[]");
-      } catch (e) {
-        return [];
-      }
+      try { return JSON.parse(localStorage.getItem("deletedProductKeys") || "[]"); } catch (e) { return []; }
     };
 
     const addDeletedProductKey = (key) => {
@@ -176,13 +177,8 @@
       }
     };
 
-    // Persistent deleted bill IDs filter
     const getDeletedBillIds = () => {
-      try {
-        return JSON.parse(localStorage.getItem("deletedBillIds") || "[]");
-      } catch (e) {
-        return [];
-      }
+      try { return JSON.parse(localStorage.getItem("deletedBillIds") || "[]"); } catch (e) { return []; }
     };
 
     const addDeletedBillId = (id) => {
@@ -196,13 +192,8 @@
 
     const getTodayDateStr = () => new Date().toISOString().split('T')[0];
 
-    // Local Storage Balance Cache
     const getLocalBalancesCache = () => {
-      try {
-        return JSON.parse(localStorage.getItem("customerBalancesCache") || "{}");
-      } catch (e) {
-        return {};
-      }
+      try { return JSON.parse(localStorage.getItem("customerBalancesCache") || "{}"); } catch (e) { return {}; }
     };
 
     const saveLocalBalanceCache = (custName, balance, lastBilledInfo) => {
@@ -214,12 +205,10 @@
         lastBilledInfo: lastBilledInfo || null,
         updatedDate: getTodayDateStr()
       };
-      try {
-        localStorage.setItem("customerBalancesCache", JSON.stringify(cache));
-      } catch (e) {}
+      try { localStorage.setItem("customerBalancesCache", JSON.stringify(cache)); } catch (e) {}
     };
 
-    // IndexedDB Storage Engine
+    // IndexedDB Storage
     const idbStorage = {
       dbPromise: null,
       init() {
@@ -228,18 +217,10 @@
           const request = indexedDB.open("RoughBillDB", 3);
           request.onupgradeneeded = (e) => {
             const db = e.target.result;
-            if (!db.objectStoreNames.contains("bills")) {
-              db.createObjectStore("bills", { keyPath: "id" });
-            }
-            if (!db.objectStoreNames.contains("pendingSync")) {
-              db.createObjectStore("pendingSync", { keyPath: "id" });
-            }
-            if (!db.objectStoreNames.contains("products")) {
-              db.createObjectStore("products", { keyPath: "name" });
-            }
-            if (!db.objectStoreNames.contains("customers")) {
-              db.createObjectStore("customers", { keyPath: "name" });
-            }
+            if (!db.objectStoreNames.contains("bills")) db.createObjectStore("bills", { keyPath: "id" });
+            if (!db.objectStoreNames.contains("pendingSync")) db.createObjectStore("pendingSync", { keyPath: "id" });
+            if (!db.objectStoreNames.contains("products")) db.createObjectStore("products", { keyPath: "name" });
+            if (!db.objectStoreNames.contains("customers")) db.createObjectStore("customers", { keyPath: "name" });
           };
           request.onsuccess = () => resolve(request.result);
           request.onerror = () => reject(request.error);
@@ -251,11 +232,8 @@
         return new Promise((resolve) => {
           const tx = db.transaction(["bills", "pendingSync"], "readwrite");
           tx.objectStore("bills").put(bill);
-          if (isPending) {
-            tx.objectStore("pendingSync").put(bill);
-          } else {
-            tx.objectStore("pendingSync").delete(bill.id);
-          }
+          if (isPending) tx.objectStore("pendingSync").put(bill);
+          else tx.objectStore("pendingSync").delete(bill.id);
           tx.oncomplete = () => resolve(true);
           tx.onerror = () => resolve(false);
         });
@@ -328,10 +306,7 @@
     };
 
     window.firebaseBridge = {
-      connected: true,
-      products: [],
-      bills: [],
-      customers: [],
+      connected: true, products: [], bills: [], customers: [],
       
       saveBillToCloudWithNumericId: async (numericId, bill, isEdit, targetUrl = DEFAULT_SCRIPT_URL) => {
         const cleanItems = (bill.items || []).map(item => ({
@@ -344,12 +319,15 @@
           totalAmount: getItemTotalAmount(item)
         }));
 
+        // SAVE ONLY CURRENT BILL AMOUNT
+        const saveAmount = Math.round(bill.currentBillAmount || bill.totalAmount || 0);
+
         const payload = {
           action: isEdit ? 'updateTxn' : 'addTxn',
           txn: {
             id: numericId,
             name: bill.customerName,
-            amount: Math.round(bill.totalAmount),
+            amount: saveAmount,
             date: bill.date,
             type: "bill",
             remarks: ""
@@ -366,19 +344,17 @@
         const localBillObj = {
           ...bill,
           items: cleanItems,
+          amount: saveAmount,
           localUpdatedAt: Date.now()
         };
 
         await idbStorage.saveBill(localBillObj, !navigator.onLine);
 
-        if (!navigator.onLine) {
-          throw new Error("Offline - Saved locally");
-        }
+        if (!navigator.onLine) throw new Error("Offline - Saved locally");
 
         try {
           await fetch(targetUrl, {
-            method: "POST",
-            mode: "no-cors",
+            method: "POST", mode: "no-cors",
             headers: { "Content-Type": "text/plain" },
             body: JSON.stringify(payload)
           });
@@ -393,55 +369,25 @@
       deleteTxnFromCloud: async (numericId, targetUrl = DEFAULT_SCRIPT_URL) => {
         addDeletedBillId(numericId);
         await idbStorage.removeBill(numericId);
-        const payload = {
-          action: 'deleteTxn',
-          id: numericId
-        };
+        const payload = { action: 'deleteTxn', id: numericId };
         try {
-          await fetch(targetUrl, {
-            method: "POST",
-            mode: "no-cors",
-            headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify(payload)
-          });
-        } catch (e) {
-          console.warn("Background bill delete error:", e);
-        }
+          await fetch(targetUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(payload) });
+        } catch (e) {}
       },
 
       addProductToCloud: async (prod, targetUrl = DEFAULT_SCRIPT_URL) => {
-        const payload = {
-          action: 'addProduct',
-          name: prod.name
-        };
+        const payload = { action: 'addProduct', name: prod.name };
         try {
-          await fetch(targetUrl, {
-            method: "POST",
-            mode: "no-cors",
-            headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify(payload)
-          });
-        } catch (e) {
-          console.warn("Background product add error:", e);
-        }
+          await fetch(targetUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(payload) });
+        } catch (e) {}
       },
 
       deleteProductFromCloud: async (name, targetUrl = DEFAULT_SCRIPT_URL) => {
         await idbStorage.removeProduct(name);
-        const payload = {
-          action: 'deleteProduct',
-          name: name
-        };
+        const payload = { action: 'deleteProduct', name: name };
         try {
-          await fetch(targetUrl, {
-            method: "POST",
-            mode: "no-cors",
-            headers: { "Content-Type": "text/plain" },
-            body: JSON.stringify(payload)
-          });
-        } catch (e) {
-          console.warn("Background product delete error:", e);
-        }
+          await fetch(targetUrl, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(payload) });
+        } catch (e) {}
       }
     };
 
@@ -450,8 +396,7 @@
       const [customerName, setCustomerName] = useState("");
       const [customerCity, setCustomerCity] = useState("");
       const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
-      
-      const [discountX, setDiscountX] = useState("15"); 
+      const [discountX, setDiscountX] = useState("15");
 
       const [baggedItems, setBaggedItems] = useState([]);
       const [dbCustomers, setDbCustomers] = useState([]);
@@ -464,8 +409,12 @@
       const [lastProductName, setLastProductName] = useState("");
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
+
+      // Historic Auto-Lock state
       const [isVerified, setIsVerified] = useState(false);
-      const [passwordInput, setPasswordInput] = useState("");
+      const [passInput, setPassInput] = useState("");
+      const lockTimerRef = useRef(null);
+
       const [visibleLogPreviews, setVisibleLogPreviews] = useState({});
       const [selectedCatalogProduct, setSelectedCatalogProduct] = useState(null);
       const [mergeTargetSearch, setMergeTargetSearch] = useState("");
@@ -477,51 +426,70 @@
       const [billToDelete, setBillToDelete] = useState(null);
       const [showNewBillConfirmModal, setShowNewBillConfirmModal] = useState(false);
 
-      // Offline Resilience & Pending Sync
+      // Worker Gathering Order Slip
+      const [showWorkerSlipModal, setShowWorkerSlipModal] = useState(false);
+      const [workerNoteInput, setWorkerNoteInput] = useState("");
+
+      // Offline Resilience & Draft persistence
       const [isOnline, setIsOnline] = useState(navigator.onLine);
       const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
-      // Last Balance Feature States
+      // Last Balance Feature
       const [includeLastBalance, setIncludeLastBalance] = useState(false);
       const [lastBalanceAmount, setLastBalanceAmount] = useState(0);
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
       const [lastBilledInfo, setLastBilledInfo] = useState(null);
 
-      // Printable & App Settings State
+      // Print Settings
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
           if (saved) return JSON.parse(saved);
         } catch (e) {}
         return {
-          showName: true,
-          showCity: true,
-          showDate: true,
-          showTime: true,
-          fontSize: '24',
-          fontFamily: 'Courier Prime',
-          rowSpacing: '8',
-          colSpacing: '4',
-          primarySheetUrl: DEFAULT_SCRIPT_URL,
-          lastBalanceSheetUrl: DEFAULT_LAST_BAL_SCRIPT_URL,
-          enableInlineAutocomplete: true,
-          footerMessage: "Thank You For Your Visit\nPlease Visit Again"
+          showName: true, showCity: true, showDate: true, showTime: true, showSNo: false,
+          fontSize: '24', fontFamily: 'Courier Prime', rowSpacing: '8', colSpacing: '4',
+          primarySheetUrl: DEFAULT_SCRIPT_URL, lastBalanceSheetUrl: DEFAULT_LAST_BAL_SCRIPT_URL,
+          enableInlineAutocomplete: true, footerMessage: "Thank You For Your Visit\nPlease Visit Again"
         };
       });
 
       useEffect(() => {
-        try {
-          localStorage.setItem("roughBillPrintSettings", JSON.stringify(printSettings));
-        } catch (e) {}
+        try { localStorage.setItem("roughBillPrintSettings", JSON.stringify(printSettings)); } catch (e) {}
       }, [printSettings]);
 
-      // Date Range Report States
+      // LOAD LOCAL DRAFT ON STARTUP
+      useEffect(() => {
+        try {
+          const savedDraft = localStorage.getItem("billDraftData");
+          if (savedDraft) {
+            const d = JSON.parse(savedDraft);
+            if (d.customerName) setCustomerName(d.customerName);
+            if (d.customerCity) setCustomerCity(d.customerCity);
+            if (d.discountX) setDiscountX(d.discountX);
+            if (Array.isArray(d.baggedItems)) setBaggedItems(d.baggedItems);
+            if (d.includeLastBalance !== undefined) setIncludeLastBalance(d.includeLastBalance);
+            if (d.lastBalanceAmount) setLastBalanceAmount(d.lastBalanceAmount);
+          }
+        } catch (e) {}
+      }, []);
+
+      // SAVE LOCAL DRAFT ON UPDATE
+      useEffect(() => {
+        try {
+          const draftObj = { customerName, customerCity, discountX, baggedItems, includeLastBalance, lastBalanceAmount };
+          localStorage.setItem("billDraftData", JSON.stringify(draftObj));
+        } catch (e) {}
+      }, [customerName, customerCity, discountX, baggedItems, includeLastBalance, lastBalanceAmount]);
+
+      // Report Preset
       const [reportPreset, setReportPreset] = useState("2days");
       const [reportStartDate, setReportStartDate] = useState(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
       const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
 
       const custRef = useRef(null);
       const parserRef = useRef(null);
+      const baggedListRef = useRef(null);
 
       const activeScriptUrl = printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL;
       const lastBalScriptUrl = printSettings.lastBalanceSheetUrl || DEFAULT_LAST_BAL_SCRIPT_URL;
@@ -540,41 +508,31 @@
         return cleaned.slice(0, 4) || "LOCA";
       };
 
-      // Compute last balance dynamically from a transaction list
       const computeLastBalanceFromTxnsArray = (txnsList, nameVal) => {
         if (!nameVal || !nameVal.trim() || !Array.isArray(txnsList)) return { balance: 0, latestBill: null };
         const targetKey = getNormalizedKey(nameVal);
-        let bSum = 0;
-        let pSum = 0;
-        let latestBill = null;
+        let bSum = 0, pSum = 0, latestBill = null;
 
         txnsList.forEach(t => {
           const tName = getNormalizedKey(getTxnName(t));
           if (tName === targetKey) {
             const typeStr = getTxnType(t);
             const amt = getTxnAmount(t);
-            if (typeStr === "pay") {
-              pSum += amt;
-            } else if (typeStr === "bill") {
+            if (typeStr === "pay") pSum += amt;
+            else if (typeStr === "bill") {
               bSum += amt;
               if (amt > 0) {
                 const tId = getTxnId(t) ? Number(getTxnId(t)) : 0;
                 const curLatestId = latestBill ? (getTxnId(latestBill) ? Number(getTxnId(latestBill)) : 0) : -1;
-                if (!latestBill || tId >= curLatestId) {
-                  latestBill = t;
-                }
+                if (!latestBill || tId >= curLatestId) latestBill = t;
               }
             }
           }
         });
 
-        return {
-          balance: bSum - pSum,
-          latestBill: latestBill
-        };
+        return { balance: bSum - pSum, latestBill: latestBill };
       };
 
-      // Fetch customer's last balance & last bill info
       const fetchLastBalanceInBackground = (nameVal, forceFetch = false) => {
         if (!nameVal || nameVal.trim() === "") {
           setLastBalanceAmount(0);
@@ -589,9 +547,7 @@
         if (cachedItem && !forceFetch) {
           setLastBalanceAmount(cachedItem.balance || 0);
           setLastBilledInfo(cachedItem.lastBilledInfo || null);
-          if (cachedItem.updatedDate === getTodayDateStr()) {
-            return;
-          }
+          if (cachedItem.updatedDate === getTodayDateStr()) return;
         }
 
         setIsFetchingLastBalance(true);
@@ -602,28 +558,17 @@
             setIsFetchingLastBalance(false);
             document.getElementById(callbackName)?.remove();
             delete window[callbackName];
-            console.warn("Balance fetch timed out, falling back to cached value.");
           }
         }, 8000);
 
         window[callbackName] = (data) => {
           clearTimeout(timeoutId);
           if (data) {
-            let txns = [];
-            if (data.txns) txns = data.txns;
-            else if (data.Txns) txns = data.Txns;
-            else if (data.transactions) txns = data.transactions;
-            else if (data.Transactions) txns = data.Transactions;
-            else if (Array.isArray(data)) txns = data;
-
+            let txns = data.txns || data.Txns || data.transactions || data.Transactions || (Array.isArray(data) ? data : []);
             const remoteResult = computeLastBalanceFromTxnsArray(txns, nameVal);
 
             let finalBal = remoteResult.balance;
-            if (data.balance !== undefined && !isNaN(parseFloat(data.balance))) {
-              finalBal = parseFloat(data.balance);
-            } else if (data.Balance !== undefined && !isNaN(parseFloat(data.Balance))) {
-              finalBal = parseFloat(data.Balance);
-            }
+            if (data.balance !== undefined && !isNaN(parseFloat(data.balance))) finalBal = parseFloat(data.balance);
 
             setLastBalanceAmount(finalBal);
 
@@ -632,15 +577,14 @@
 
             if (activeLatestBill) {
               const rawDate = getTxnDate(activeLatestBill) || activeLatestBill.timestamp;
-              const bDate = formatInvoiceDateTime(rawDate);
+              const formattedDDMM = formatDDMM(rawDate);
               const bAmt = getTxnAmount(activeLatestBill);
-              const codeAmt = encodeKanpurcity(bAmt);
-              const formattedDateStr = bDate ? bDate.split(' ')[0] : "";
+              const codeAmt = encodeCustomCipher(bAmt);
               billingObj = {
-                date: formattedDateStr,
+                date: formattedDDMM,
                 amount: bAmt,
                 code: codeAmt,
-                display: `${formattedDateStr} ${codeAmt}`
+                display: `${formattedDDMM} ${codeAmt}`
               };
             }
 
@@ -728,16 +672,14 @@
           try {
             await window.firebaseBridge.saveBillToCloudWithNumericId(bill.id, bill, false, activeScriptUrl);
             syncedCount++;
-          } catch (e) {
-            console.warn("Background bill sync attempt deferred:", e);
-          }
+          } catch (e) {}
         }
 
         const remainingPending = await idbStorage.getPending();
         setPendingSyncCount(remainingPending.length);
 
         if (syncedCount > 0) {
-          triggerNotification(`✓ Successfully auto-synced ${syncedCount} offline bill(s) to Sheets!`);
+          triggerNotification(`✓ Auto-synced ${syncedCount} offline bill(s) to Sheets!`);
           syncDataFromGoogleSheets();
         }
       };
@@ -754,32 +696,9 @@
             const rawTxns = data.txns || data.Txns || data.transactions || data.Transactions || [];
 
             if (rawCusts) {
-              let parsedCustomers = [];
-              if (Array.isArray(rawCusts)) {
-                parsedCustomers = rawCusts.map(c => {
-                  const rawCity = String(c.city || c.City || "");
-                  return {
-                    name: c.name || c.Name || "",
-                    phone: c.phone || c.Phone || "",
-                    joined: c.joined || c.Joined || "",
-                    city: (rawCity.toLowerCase() === "local") ? "" : rawCity,
-                    discount: c.discount || c.Discount || 0,
-                    balance: c.balance || c.Balance || 0
-                  };
-                });
-              } else if (typeof rawCusts === "object") {
-                parsedCustomers = Object.entries(rawCusts).map(([name, details]) => {
-                  const rawCity = details ? String(details.city || details.City || "") : "";
-                  return {
-                    name: name,
-                    phone: details ? (details.phone || details.Phone || "") : "",
-                    joined: details ? (details.joined || details.Joined || "") : "",
-                    city: (rawCity.toLowerCase() === "local") ? "" : rawCity,
-                    discount: details ? (details.discount || details.Discount || 0) : 0,
-                    balance: details ? (details.balance || details.Balance || 0) : 0
-                  };
-                });
-              }
+              let parsedCustomers = Array.isArray(rawCusts) 
+                ? rawCusts.map(c => ({ name: c.name || c.Name || "", phone: c.phone || "", city: (String(c.city || "").toLowerCase() === "local") ? "" : (c.city || ""), discount: c.discount || 0 }))
+                : Object.entries(rawCusts).map(([name, details]) => ({ name, city: details?.city || "", discount: details?.discount || 0 }));
               setDbCustomers(parsedCustomers);
               window.firebaseBridge.customers = parsedCustomers;
               idbStorage.cacheCustomers(parsedCustomers);
@@ -797,61 +716,31 @@
                 const prevMap = new Map();
                 prevBills.forEach(b => prevMap.set(String(getTxnId(b)), b));
 
-                const remoteValid = rawTxns.filter(b => {
-                  const bId = getTxnId(b);
-                  return bId && !deletedBillIds.includes(String(bId));
-                });
+                const remoteValid = rawTxns.filter(b => getTxnId(b) && !deletedBillIds.includes(String(getTxnId(b))));
 
                 const merged = remoteValid.map(remoteTxn => {
                   const remoteId = String(getTxnId(remoteTxn));
                   const localTxn = prevMap.get(remoteId);
                   const remoteItems = parseItemsSafely(getTxnItems(remoteTxn));
                   const remoteName = getTxnName(remoteTxn) || "Walk-In Customer";
-                  const remoteCity = remoteTxn.customerCity || remoteTxn.CustomerCity || remoteTxn.city || remoteTxn.City || "";
-                  const remoteAmount = getTxnAmount(remoteTxn);
-                  const remoteType = getTxnType(remoteTxn);
+                  const remoteCity = remoteTxn.customerCity || remoteTxn.city || "";
 
-                  if (localTxn) {
-                    const localItems = parseItemsSafely(localTxn.items);
-                    const isRecentlySavedLocally = (Date.now() - (localTxn.localUpdatedAt || 0)) < 30000;
-                    if (isRecentlySavedLocally && localItems.length > 0) {
-                      return {
-                        ...remoteTxn,
-                        ...localTxn,
-                        id: remoteId,
-                        customerName: localTxn.customerName || remoteName,
-                        customerCity: localTxn.customerCity || remoteCity,
-                        items: localItems,
-                        totalAmount: localTxn.totalAmount || remoteAmount,
-                        type: localTxn.type || remoteType
-                      };
-                    }
+                  if (localTxn && (Date.now() - (localTxn.localUpdatedAt || 0)) < 30000 && parseItemsSafely(localTxn.items).length > 0) {
+                    return { ...remoteTxn, ...localTxn, id: remoteId };
                   }
 
                   return {
-                    ...remoteTxn,
-                    id: remoteId,
-                    customerName: remoteName,
-                    customerCity: remoteCity,
-                    items: remoteItems,
-                    totalAmount: remoteAmount,
-                    type: remoteType
+                    ...remoteTxn, id: remoteId, customerName: remoteName, customerCity: remoteCity,
+                    items: remoteItems, totalAmount: getTxnAmount(remoteTxn), type: getTxnType(remoteTxn)
                   };
                 });
 
                 prevBills.forEach(localTxn => {
                   const lId = String(getTxnId(localTxn));
-                  if (!deletedBillIds.includes(lId) && !merged.some(m => String(getTxnId(m)) === lId)) {
-                    merged.push(localTxn);
-                  }
+                  if (!deletedBillIds.includes(lId) && !merged.some(m => String(getTxnId(m)) === lId)) merged.push(localTxn);
                 });
 
-                const sortedTxns = merged.sort((a, b) => {
-                  const timeA = getTxnId(a) ? Number(getTxnId(a)) : new Date(getTxnDate(a) || 0).getTime();
-                  const timeB = getTxnId(b) ? Number(getTxnId(b)) : new Date(getTxnDate(b) || 0).getTime();
-                  return timeB - timeA;
-                });
-
+                const sortedTxns = merged.sort((a, b) => (getTxnId(b) ? Number(getTxnId(b)) : 0) - (getTxnId(a) ? Number(getTxnId(a)) : 0));
                 window.firebaseBridge.bills = sortedTxns;
                 sortedTxns.forEach(b => idbStorage.saveBill(b, false));
                 return sortedTxns;
@@ -875,17 +764,13 @@
             syncDataFromGoogleSheets();
             syncPendingOfflineBills();
           }
-          if (bleDevice && !bleCharacteristic) {
-            reconnectBLEPrinterQuietly();
-          }
-        }, 5000);
+          if (bleDevice && !bleCharacteristic) reconnectBLEPrinterQuietly();
+        }, 6000);
         return () => clearInterval(interval);
       }, [bleDevice, bleCharacteristic, activeScriptUrl]);
 
       useEffect(() => {
-        if (currentTab === "bill" && parserRef.current) {
-          parserRef.current.focus();
-        }
+        if (currentTab === "bill" && parserRef.current) parserRef.current.focus();
       }, [currentTab]);
 
       const formatInvoiceDateTime = (dateStr) => {
@@ -893,10 +778,8 @@
         const currentRealTime = new Date();
         if (isNaN(baseDate.getTime())) return "";
         baseDate.setHours(currentRealTime.getHours(), currentRealTime.getMinutes());
-        const day = String(baseDate.getDate()).padStart(2, '0');
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
         
-        const datePart = `${day}, ${months[baseDate.getMonth()]}`;
+        const datePart = formatDDMM(baseDate);
         const timePart = `${String(baseDate.getHours()).padStart(2, '0')}:${String(baseDate.getMinutes()).padStart(2, '0')}`;
 
         if (printSettings.showDate && printSettings.showTime) return `${datePart} ${timePart}`;
@@ -909,53 +792,32 @@
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerName(match.name);
-          const matchedCity = match.city && String(match.city).toLowerCase() !== "local" ? match.city : "";
-          setCustomerCity(matchedCity);
+          setCustomerCity(match.city && String(match.city).toLowerCase() !== "local" ? match.city : "");
           setDiscountX(match.discount !== undefined && match.discount !== 0 ? String(match.discount) : "15");
           setShowCustSuggestions(false);
           fetchLastBalanceInBackground(match.name, false);
         } else {
-          setCustomerName("");
-          setCustomerCity("");
-          setDiscountX("15");
-          setLastBalanceAmount(0);
-          setLastBilledInfo(null);
-          triggerNotification("Select a valid customer from database.");
+          setCustomerName(""); setCustomerCity(""); setDiscountX("15"); setLastBalanceAmount(0); setLastBilledInfo(null);
+          triggerNotification("Select valid customer from database.");
         }
       };
 
       const handleResetAll = () => {
         setCustomerName(""); setCustomerCity(""); setDiscountX("15");
-        setBaggedItems([]); setEditingBillId(null);
-        setParserInput("");
-        setGroupLessInputs({});
-        setIncludeLastBalance(false);
-        setLastBalanceAmount(0);
-        setLastBilledInfo(null);
-        setTimeout(() => {
-          if (parserRef.current) parserRef.current.focus();
-        }, 100);
+        setBaggedItems([]); setEditingBillId(null); setParserInput("");
+        setGroupLessInputs({}); setIncludeLastBalance(false);
+        setLastBalanceAmount(0); setLastBilledInfo(null);
+        try { localStorage.removeItem("billDraftData"); } catch(e) {}
+        setTimeout(() => { if (parserRef.current) parserRef.current.focus(); }, 100);
       };
 
-      // Load Historical Bill
       const handleLoadHistoricalBill = (historicalBillObj) => {
         const loadedCustName = getTxnName(historicalBillObj) || "";
-        const loadedCity = historicalBillObj.customerCity || 
-                           historicalBillObj.city || 
-                           (historicalBillObj.customer && historicalBillObj.customer.city) || "";
+        const loadedCity = historicalBillObj.customerCity || historicalBillObj.city || "";
 
         setCustomerName(loadedCustName);
-
-        if (loadedCity && String(loadedCity).toLowerCase() !== "local") {
-          setCustomerCity(loadedCity);
-        } else if (loadedCustName) {
-          const custMatch = dbCustomers.find(c => c && c.name && getNormalizedKey(c.name) === getNormalizedKey(loadedCustName));
-          setCustomerCity(custMatch && custMatch.city && String(custMatch.city).toLowerCase() !== "local" ? custMatch.city : "");
-        } else {
-          setCustomerCity("");
-        }
-
-        setDiscountX(String(historicalBillObj.discountRate || historicalBillObj.discount || 15));
+        setCustomerCity(loadedCity && String(loadedCity).toLowerCase() !== "local" ? loadedCity : "");
+        setDiscountX(String(historicalBillObj.discountRate || 15));
         setBillDate(getTxnDate(historicalBillObj) ? String(getTxnDate(historicalBillObj)).split(' ')[0] : new Date().toISOString().split('T')[0]);
         
         const rawItems = parseItemsSafely(getTxnItems(historicalBillObj));
@@ -964,31 +826,22 @@
           const priceVal = parseFloat(i.basePrice || i.rate || i.price || i.finalUnitPrice || 0);
           const lessVal = (i.less !== undefined && i.less !== null && String(i.less) !== "—") ? String(i.less) : "0";
           const deduct = (lessVal !== "—" && !isNaN(parseFloat(lessVal))) ? parseFloat(lessVal) : 0;
-          const finalPrice = i.finalUnitPrice !== undefined && !isNaN(parseFloat(i.finalUnitPrice))
-            ? parseFloat(i.finalUnitPrice) 
-            : Math.max(0, priceVal - deduct);
-          const totalAmt = getItemTotalAmount(i);
+          const finalPrice = Math.max(0, priceVal - deduct);
 
           return {
-            id: 'loaded_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).substring(2, 7),
-            qty: qtyVal,
-            name: i.name || "Item",
-            code: (i.code && String(i.code) !== "—" && String(i.code) !== "") ? String(i.code) : "—",
-            basePrice: priceVal,
-            less: lessVal,
-            finalUnitPrice: finalPrice,
-            totalAmount: totalAmt
+            id: 'loaded_' + Date.now() + '_' + idx,
+            qty: qtyVal, name: i.name || "Item",
+            code: (i.code && String(i.code) !== "—") ? String(i.code) : "—",
+            basePrice: priceVal, less: lessVal,
+            finalUnitPrice: finalPrice, totalAmount: qtyVal * finalPrice
           };
         });
 
         setBaggedItems(normalized);
         setEditingBillId(String(getTxnId(historicalBillObj)) || null);
         setCurrentTab("bill");
-        triggerNotification(`✓ Loaded bill with all ${normalized.length} item(s)!`);
-
-        if (loadedCustName) {
-          fetchLastBalanceInBackground(loadedCustName, false);
-        }
+        triggerNotification(`✓ Loaded bill with ${normalized.length} item(s)!`);
+        if (loadedCustName) fetchLastBalanceInBackground(loadedCustName, false);
       };
 
       const calculateRateForToken = (codeStr, rawX) => {
@@ -1012,11 +865,9 @@
       const mostTypedProducts = useMemo(() => {
         if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
         const deletedKeys = getDeletedProductKeys();
-
         const counts = {};
         cloudBills.forEach(b => {
-          const items = parseItemsSafely(getTxnItems(b));
-          items.forEach(i => {
+          parseItemsSafely(getTxnItems(b)).forEach(i => {
             if (i && i.name) {
               const k = getNormalizedKey(i.name);
               counts[k] = (counts[k] || 0) + (parseFloat(i.qty) || 1);
@@ -1026,12 +877,7 @@
 
         return [...cloudProducts]
           .filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)))
-          .sort((a, b) => {
-            const countA = counts[getNormalizedKey(a.name)] || 0;
-            const countB = counts[getNormalizedKey(b.name)] || 0;
-            if (countB !== countA) return countB - countA;
-            return (a.name || "").localeCompare((b.name || ""), undefined, { sensitivity: 'base' });
-          });
+          .sort((a, b) => (counts[getNormalizedKey(b.name)] || 0) - (counts[getNormalizedKey(a.name)] || 0));
       }, [cloudProducts, cloudBills]);
 
       const autocompleteSuggestion = useMemo(() => {
@@ -1053,20 +899,14 @@
         let rawInput = parserInput.trim();
         if (!rawInput) return;
 
-        if (autocompleteSuggestion) {
-          rawInput = rawInput + autocompleteSuggestion;
-        }
+        if (autocompleteSuggestion) rawInput = rawInput + autocompleteSuggestion;
 
         const isSuffixCode = (str) => {
           const s = String(str || "").toLowerCase().trim();
           return s.endsWith('n') || s.endsWith('no') || s.endsWith('nu');
         };
 
-        let parsedQty = 1;
-        let codeValue = "—";
-        let unitPrice = 0;
-        let rawProdName = "";
-
+        let parsedQty = 1, codeValue = "—", unitPrice = 0, rawProdName = "";
         const match = rawInput.match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
 
         if (match) {
@@ -1083,7 +923,6 @@
             unitPrice = parseFloat(lastToken);
             tokens.pop();
           }
-
           rawProdName = tokens.join(" ").trim();
         } else {
           parsedQty = 1;
@@ -1106,38 +945,28 @@
           }
         }
 
-        if (!rawProdName) {
-          rawProdName = lastProductName ? lastProductName : "Item";
-        } else {
-          setLastProductName(rawProdName);
-        }
+        if (!rawProdName) rawProdName = lastProductName || "Item";
+        else setLastProductName(rawProdName);
 
         const displayCasing = toTitleCase(rawProdName);
-        
-        const isDuplicateCatalog = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(displayCasing));
-        if (!isDuplicateCatalog) {
+        if (!cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(displayCasing))) {
           window.firebaseBridge.addProductToCloud({ name: displayCasing }, activeScriptUrl);
           const updatedProds = [...cloudProducts, { id: Date.now(), name: displayCasing }];
           setCloudProducts(updatedProds);
           idbStorage.cacheProducts(updatedProds);
         }
 
-        const defaultSkuLess = "0";
-        const finalUnitPrice = unitPrice;
-
         const newItem = {
-          id: 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9), 
-          qty: parsedQty, 
-          name: displayCasing, 
-          code: codeValue,
-          basePrice: unitPrice, 
-          less: defaultSkuLess, 
-          finalUnitPrice: finalUnitPrice, 
-          totalAmount: parsedQty * finalUnitPrice
+          id: 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7), 
+          qty: parsedQty, name: displayCasing, code: codeValue,
+          basePrice: unitPrice, less: "0", finalUnitPrice: unitPrice, totalAmount: parsedQty * unitPrice
         };
 
+        // PREPEND ITEM TO TOP
         setBaggedItems(prev => [newItem, ...prev]);
         setParserInput(""); 
+
+        if (baggedListRef.current) baggedListRef.current.scrollTop = 0;
         if (parserRef.current) parserRef.current.focus();
       };
 
@@ -1157,9 +986,7 @@
 
             let deduction = 0;
             const cleanLess = String(updated.less || "").trim();
-            if (cleanLess !== "" && cleanLess !== "—") {
-              deduction = parseFloat(cleanLess) || 0;
-            }
+            if (cleanLess !== "" && cleanLess !== "—") deduction = parseFloat(cleanLess) || 0;
 
             updated.finalUnitPrice = Math.max(0, updated.basePrice - deduction);
             updated.totalAmount = updated.qty * updated.finalUnitPrice;
@@ -1170,8 +997,7 @@
       };
 
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
-        const valToApply = lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10";
-        const amt = parseFloat(valToApply) || 0;
+        const amt = parseFloat(lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10") || 0;
         setBaggedItems(prev => prev.map(item => {
           if (getNormalizedKey(item.name) === groupKey) {
             const updated = { ...item, less: String(amt) };
@@ -1181,7 +1007,7 @@
           }
           return item;
         }));
-        triggerNotification(`Applied ₹${amt} Less to all ${groupKey.toUpperCase()} items!`);
+        triggerNotification(`Applied ₹${amt} Less to ${groupKey.toUpperCase()} items!`);
       };
 
       const groupedBaggedItems = useMemo(() => {
@@ -1189,31 +1015,19 @@
         baggedItems.forEach(item => {
           const key = getNormalizedKey(item.name);
           if (!groups[key]) {
-            groups[key] = {
-              key: key,
-              displayName: item.name || "Item",
-              totalQty: 0,
-              totalAmount: 0,
-              items: []
-            };
+            groups[key] = { key, displayName: item.name || "Item", totalQty: 0, totalAmount: 0, items: [] };
           }
-          const itemAmt = getItemTotalAmount(item);
           groups[key].items.push(item);
           groups[key].totalQty += (parseFloat(item.qty) || 0);
-          groups[key].totalAmount += itemAmt;
+          groups[key].totalAmount += getItemTotalAmount(item);
         });
         return Object.values(groups);
       }, [baggedItems]);
 
-      const currentBillTotalSum = useMemo(() => {
-        return baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
-      }, [baggedItems]);
+      const currentBillTotalSum = useMemo(() => baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0), [baggedItems]);
+      const grandFinalBalance = useMemo(() => Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0)), [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      const grandFinalBalance = useMemo(() => {
-        return Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0));
-      }, [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
-
-      // FAIL-SAFE RECEIPT SPOOL GENERATOR
+      // RENDER RECEIPT WITH S.NO, JI SUFFIX, DD/MM DATE
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const safeItems = Array.isArray(itemsList) ? itemsList : [];
         const sortedItems = [...safeItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
@@ -1224,7 +1038,8 @@
         const rPadPx = `${printSettings?.rowSpacing || 8}px`;
         const cPadPx = `${printSettings?.colSpacing || 4}px`;
 
-        const nameStr = (printSettings?.showName && custName) ? String(custName).toUpperCase() : "";
+        const nameWithJI = formatCustomerNameJI(custName);
+        const nameStr = (printSettings?.showName) ? nameWithJI : "";
         const cityStr = (printSettings?.showCity && cityVal && String(cityVal).toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
         const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" ");
 
@@ -1248,11 +1063,12 @@
           </div>
           <table style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="w-full text-left mt-2 border-collapse font-bold">
             <thead>
-              <tr class="border-b-4 border-black font-black uppercase">
-                <th style="padding: ${rPadPx} ${cPadPx};" class="w-16 text-center">QT</th>
+              <tr class="border-b-4 border-black uppercase">
+                ${printSettings?.showSNo ? `<th style="padding: ${rPadPx} ${cPadPx};" class="w-8 text-center">#</th>` : ""}
+                <th style="padding: ${rPadPx} ${cPadPx};" class="w-14 text-center">QT</th>
                 <th style="padding: ${rPadPx} ${cPadPx};">ITEM</th>
-                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-28">P</th>
-                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-36">AMT</th>
+                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-24">P</th>
+                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-28">AMT</th>
               </tr>
             </thead>
             <tbody>
@@ -1261,10 +1077,11 @@
         sortedItems.forEach((item, index) => {
           const rawCodeOnly = (item.code && String(item.code) !== "—") ? String(item.code).trim() : "";
           const itemAmt = getItemTotalAmount(item);
-          const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || item.price || 0);
+          const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || 0);
 
           receiptHTML += `
             <tr class="align-top border-b border-stone-200">
+              ${printSettings?.showSNo ? `<td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${index + 1}</td>` : ""}
               <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${Math.round(item.qty || 1)}</td>
               <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="font-bold uppercase whitespace-pre-wrap break-all leading-tight">
                 <div>${String(item.name || "").trim().toUpperCase()}</div>
@@ -1276,11 +1093,7 @@
           `;
 
           if ((index + 1) % 5 === 0 && index !== sortedItems.length - 1) {
-            receiptHTML += `
-              <tr>
-                <td colspan="4" class="py-1 border-b-2 border-dotted border-stone-400"></td>
-              </tr>
-            `;
+            receiptHTML += `<tr><td colSpan="${printSettings?.showSNo ? 5 : 4}" class="py-1 border-b-2 border-dotted border-stone-400"></td></tr>`;
           }
         });
 
@@ -1317,7 +1130,7 @@
         const synchronousIsEdit = !!editingBillId;
         const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
         const printDateFormatted = formatInvoiceDateTime(billDate);
-        const finalClientName = customerName.trim() || "Walk-In Customer";
+        const finalClientName = formatCustomerNameJI(customerName);
 
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
@@ -1327,18 +1140,17 @@
         window.print();
 
         if (bleCharacteristic) {
-          try {
-            printBLEThermalDirectly(baggedItems, finalClientName, customerCity, printDateFormatted);
-          } catch (e) { 
-            console.warn("BLE print dispatch bypassed.", e); 
-          }
+          try { printBLEThermalDirectly(baggedItems, finalClientName, customerCity, printDateFormatted); } catch (e) {}
         }
 
+        // SAVE ONLY CURRENT BILL AMOUNT
         const billDataObject = {
           id: uniqueNumericId, customerName: finalClientName, customerCity: customerCity || "Local",
-          date: billDate, items: baggedItems, totalAmount: grandFinalBalance, discountRate: parseFloat(discountX) || 0,
-          timestamp: uniqueNumericId, syncStatusFirestore: true, syncStatusSheets: true, formattedDateTime: printDateFormatted,
-          localUpdatedAt: Date.now()
+          date: billDate, items: baggedItems, 
+          currentBillAmount: currentBillTotalSum,
+          totalAmount: currentBillTotalSum, 
+          discountRate: parseFloat(discountX) || 0,
+          timestamp: uniqueNumericId, formattedDateTime: printDateFormatted, localUpdatedAt: Date.now()
         };
 
         setCloudBills(prev => [billDataObject, ...prev.filter(b => String(getTxnId(b)) !== String(uniqueNumericId))]);
@@ -1346,35 +1158,60 @@
         if (customerName.trim()) {
           const updatedBal = lastBalanceAmount + currentBillTotalSum;
           const currentBilledInfo = {
-            date: formatInvoiceDateTime(billDate).split(' ')[0],
+            date: formatDDMM(billDate),
             amount: currentBillTotalSum,
-            code: encodeKanpurcity(currentBillTotalSum),
-            display: `${formatInvoiceDateTime(billDate).split(' ')[0]} ${encodeKanpurcity(currentBillTotalSum)}`
+            code: encodeCustomCipher(currentBillTotalSum),
+            display: `${formatDDMM(billDate)} ${encodeCustomCipher(currentBillTotalSum)}`
           };
           saveLocalBalanceCache(customerName, updatedBal, currentBilledInfo);
         }
 
         window.firebaseBridge.saveBillToCloudWithNumericId(uniqueNumericId, billDataObject, synchronousIsEdit, activeScriptUrl)
-          .then(() => triggerNotification("✓ Bill saved locally & synced to Sheets!"))
+          .then(() => triggerNotification("✓ Bill saved to Sheets!"))
           .catch(() => {
             setPendingSyncCount(prev => prev + 1);
-            triggerNotification("⚡ Saved to IndexedDB! Will auto-sync when online.");
+            triggerNotification("⚡ Saved locally! Will auto-sync when online.");
           });
 
-        setTimeout(() => {
-          handleResetAll();
-        }, 300);
+        setTimeout(() => handleResetAll(), 300);
       };
 
+      // PRINT WORKER GATHERING SLIP
+      const handlePrintWorkerSlip = () => {
+        const textToPrint = workerNoteInput.trim() || baggedItems.map(i => `${Math.round(i.qty)} ${i.name}`).join("\n");
+        if (!textToPrint) {
+          triggerNotification("Enter items or add draft products first.");
+          return;
+        }
+
+        const slipHTML = `
+          <div class="font-mono text-[24px] p-4 font-black text-center border-b-4 border-black">
+            <h2>WORKER GATHERING SLIP</h2>
+            <p class="text-[18px] font-bold mt-1">Customer: ${formatCustomerNameJI(customerName)}</p>
+            <p class="text-[16px] text-stone-600">${formatInvoiceDateTime(billDate)}</p>
+          </div>
+          <div class="font-mono text-[22px] p-4 whitespace-pre-wrap font-bold leading-relaxed border-b-2 border-black">
+            ${textToPrint}
+          </div>
+          <div class="font-mono text-center text-[16px] mt-4 font-bold">Gathered By Worker: ____________</div>
+        `;
+
+        const printBody = document.getElementById("printable-bill-invoice");
+        if (printBody) {
+          printBody.innerHTML = slipHTML;
+          setTimeout(() => window.print(), 100);
+        }
+      };
+
+      // SHARE BILL RECEIPT IMAGE
       const shareBillImage = (items, custName, cityVal, activeDate) => {
         const exportContainer = document.getElementById("image-export-container");
         if (!exportContainer) return;
 
         const printDateFormatted = formatInvoiceDateTime(activeDate);
-        const finalClientName = custName || "Walk-In Customer";
+        const finalClientName = formatCustomerNameJI(custName);
 
         exportContainer.innerHTML = renderReceiptForSpool(items, finalClientName, cityVal, printDateFormatted);
-
         triggerNotification("Generating shareable receipt image...");
 
         setTimeout(() => {
@@ -1382,41 +1219,31 @@
             .then(async (canvas) => {
               canvas.toBlob(async (blob) => {
                 if (!blob) {
-                  triggerNotification("Image export failed.");
+                  triggerNotification("Export failed.");
                   exportContainer.innerHTML = "";
                   return;
                 }
-                const fileName = `Bill_${getThreeLetterCode(finalClientName)}_${activeDate}.png`;
+                const fileName = `Bill_${formatDDMM(activeDate).replace('/', '-')}.png`;
                 const file = new File([blob], fileName, { type: 'image/png' });
 
                 if (navigator.canShare && navigator.canShare({ files: [file] })) {
                   try {
-                    await navigator.share({
-                      files: [file],
-                      title: `Bill - ${finalClientName}`,
-                      text: `Receipt for ${finalClientName} (${cityVal})`
-                    });
+                    await navigator.share({ files: [file], title: `Bill - ${finalClientName}`, text: `Receipt for ${finalClientName}` });
                     triggerNotification("✓ Shared successfully!");
                     exportContainer.innerHTML = "";
                     return;
-                  } catch (shareErr) {
-                    console.warn("Native share error, downloading instead:", shareErr);
-                  }
+                  } catch (e) {}
                 }
 
                 const link = document.createElement("a");
                 link.href = URL.createObjectURL(blob);
                 link.download = fileName;
                 link.click();
-                triggerNotification("✓ Image Downloaded!");
+                triggerNotification("✓ Receipt Image Saved!");
                 exportContainer.innerHTML = "";
               }, 'image/png');
             })
-            .catch(err => {
-              console.error("Canvas image export failed:", err);
-              triggerNotification("Image generation failed.");
-              exportContainer.innerHTML = "";
-            });
+            .catch(() => { exportContainer.innerHTML = ""; });
         }, 100);
       };
 
@@ -1424,30 +1251,18 @@
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           const rawDate = getTxnDate(logItem) || logItem.timestamp;
-          const printDateFormatted = formatInvoiceDateTime(rawDate ? new Date(rawDate) : new Date());
-          printBody.innerHTML = renderReceiptForSpool(parseItemsSafely(getTxnItems(logItem)), getTxnName(logItem), logItem.customerCity || logItem.city, printDateFormatted);
+          printBody.innerHTML = renderReceiptForSpool(parseItemsSafely(getTxnItems(logItem)), getTxnName(logItem), logItem.customerCity || logItem.city, formatInvoiceDateTime(rawDate));
         }
         window.print();
-
-        if (bleCharacteristic) {
-          try {
-            const rawDate = getTxnDate(logItem) || logItem.timestamp;
-            const printDateFormatted = formatInvoiceDateTime(rawDate ? new Date(rawDate) : new Date());
-            printBLEThermalDirectly(parseItemsSafely(getTxnItems(logItem)), getTxnName(logItem), logItem.customerCity || logItem.city, printDateFormatted);
-          } catch (e) { console.warn("BLE print logs bypassed.", e); }
-        }
       };
 
       const toggleLogItemPreview = (billId) => {
-        setVisibleLogPreviews(prev => ({
-          ...prev,
-          [billId]: !prev[billId]
-        }));
+        setVisibleLogPreviews(prev => ({ ...prev, [billId]: !prev[billId] }));
       };
 
       const connectBluetoothPrinter = async () => {
         if (!navigator.bluetooth) {
-          triggerNotification("Web BLE is unsupported on this browser.");
+          triggerNotification("Web BLE unsupported on this browser.");
           return;
         }
         setBleStatus("Scanning...");
@@ -1459,20 +1274,14 @@
           setBleStatus("Connecting...");
           const server = await device.gatt.connect();
           let service;
-          try {
-            service = await server.getPrimaryService("000018f0-0000-1000-8000-00805f9b34fb");
-          } catch(e) {
-            service = await server.getPrimaryService("0000e7e1-0000-1000-8000-00805f9b34fb");
-          }
+          try { service = await server.getPrimaryService("000018f0-0000-1000-8000-00805f9b34fb"); }
+          catch(e) { service = await server.getPrimaryService("0000e7e1-0000-1000-8000-00805f9b34fb"); }
           const characteristics = await service.getCharacteristics();
           const writer = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
-          setBleDevice(device);
-          setBleCharacteristic(writer);
-          setBleStatus("Connected");
+          setBleDevice(device); setBleCharacteristic(writer); setBleStatus("Connected");
           triggerNotification("BLE Printer Connected!");
         } catch (err) {
           setBleStatus("Disconnected");
-          triggerNotification("BLE connection failed.");
         }
       };
 
@@ -1481,18 +1290,12 @@
         try {
           const server = await bleDevice.gatt.connect();
           let service;
-          try {
-            service = await server.getPrimaryService("000018f0-0000-1000-8000-00805f9b34fb");
-          } catch(e) {
-            service = await server.getPrimaryService("0000e7e1-0000-1000-8000-00805f9b34fb");
-          }
+          try { service = await server.getPrimaryService("000018f0-0000-1000-8000-00805f9b34fb"); }
+          catch(e) { service = await server.getPrimaryService("0000e7e1-0000-1000-8000-00805f9b34fb"); }
           const characteristics = await service.getCharacteristics();
           const writer = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
-          setBleCharacteristic(writer);
-          setBleStatus("Connected");
-        } catch (err) {
-          setBleStatus("Disconnected");
-        }
+          setBleCharacteristic(writer); setBleStatus("Connected");
+        } catch (err) { setBleStatus("Disconnected"); }
       };
 
       const handleCatalogDelete = async (name) => {
@@ -1501,34 +1304,17 @@
         try {
           await window.firebaseBridge.deleteProductFromCloud(name, activeScriptUrl);
           const updated = cloudProducts.filter(p => getNormalizedKey(p.name) !== prodKey);
-          setCloudProducts(updated);
-          idbStorage.cacheProducts(updated);
-          triggerNotification("✓ Product deleted permanently from directory!");
-        } catch (err) {
-          console.error(err);
-        }
+          setCloudProducts(updated); idbStorage.cacheProducts(updated);
+          triggerNotification("✓ Product deleted permanently!");
+        } catch (err) {}
       };
 
-      const getParserAutocompleteQueryLocal = () => {
-        const trimmed = parserInput.trim();
-        if (!trimmed) return "";
-        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-        if (match) {
-          const rest = match[2].trim();
-          const tokens = rest.split(/\s+/);
-          if (tokens.length > 0) {
-            const lastToken = tokens[tokens.length - 1];
-            if (lastToken.toLowerCase().endsWith('n') || lastToken.toLowerCase().endsWith('no') || lastToken.toLowerCase().endsWith('nu') || (!isNaN(parseFloat(lastToken)) && isFinite(lastToken))) {
-              tokens.pop();
-            }
-          }
-          return tokens.join(" ");
+      // SELECT SUGGESTION & KEEP KEYBOARD OPEN
+      const selectParserSuggestion = (prodName, e) => {
+        if (e) {
+          e.preventDefault();
+          e.stopPropagation();
         }
-        if (isNaN(parseFloat(trimmed.split(/\s+/)[0]))) return trimmed;
-        return "";
-      };
-
-      const selectParserSuggestion = (prodName) => {
         const trimmed = parserInput.trimStart();
         const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
         const currentQty = match ? match[1] : "1";
@@ -1536,16 +1322,40 @@
         if (parserRef.current) parserRef.current.focus();
       };
 
-      // Unverified shows 2 bills, Verified shows 12 bills
-      const getSecureLogBills = () => isVerified ? cloudBills.slice(0, 12) : cloudBills.slice(0, 2);
+      // HISTORIC BILLS FILTERED TO LAST 7 DAYS & AUTO-LOCK FOR 2 MINS
+      const last7DaysBills = useMemo(() => {
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        return cloudBills.filter(b => {
+          const bId = getTxnId(b);
+          const bDate = getTxnDate(b);
+          const bTime = bId ? Number(bId) : new Date(bDate || 0).getTime();
+          return bTime >= sevenDaysAgo;
+        });
+      }, [cloudBills]);
+
+      const visibleHistoricBills = isVerified ? last7DaysBills : last7DaysBills.slice(0, 3);
+
+      const handlePasscodeUnlockInput = (e) => {
+        const val = e.target.value;
+        setPassInput(val);
+        if (val === "ab") {
+          setIsVerified(true);
+          triggerNotification("Unlocked for 2 minutes!");
+          if (lockTimerRef.current) clearTimeout(lockTimerRef.current);
+          lockTimerRef.current = setTimeout(() => {
+            setIsVerified(false);
+            setPassInput("");
+            triggerNotification("Locked automatically after 2 minutes.");
+          }, 120000);
+        }
+      };
 
       const handleProductAddSubmit = async (e) => {
         e.preventDefault();
         const trimmed = newProdName.trim();
         if (!trimmed) return;
 
-        const isDuplicate = cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(trimmed));
-        if (isDuplicate) {
+        if (cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(trimmed))) {
           triggerNotification("Product already exists!");
           return;
         }
@@ -1554,67 +1364,37 @@
         try {
           await window.firebaseBridge.addProductToCloud({ name: formattedName }, activeScriptUrl);
           const updated = [...cloudProducts, { id: Date.now(), name: formattedName }];
-          setCloudProducts(updated);
-          idbStorage.cacheProducts(updated);
-          setNewProdNameState("");
-          triggerNotification("Product synced to database!");
-        } catch (err) {
-          console.error(err);
-          triggerNotification("Failed to add product.");
-        }
+          setCloudProducts(updated); idbStorage.cacheProducts(updated); setNewProdNameState("");
+          triggerNotification("Product added!");
+        } catch (err) {}
       };
 
-      // Thermal BLE Print Generator
       const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
         if (!bleCharacteristic) return;
         const encoder = new TextEncoder();
         let esc = [];
 
-        esc.push(0x1B, 0x40); // Init
-        esc.push(0x1B, 0x61, 0x01); // Center
+        esc.push(0x1B, 0x40, 0x1B, 0x61, 0x01);
         esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
         
-        const nameStr = (printSettings?.showName && custName) ? String(custName).toUpperCase() : "";
+        const nameStr = formatCustomerNameJI(custName);
         const cityStr = (printSettings?.showCity && cityVal && String(cityVal).toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
-        const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" - ");
-
-        if (nameCityLine) {
-          esc.push(...encoder.encode(`${nameCityLine}\n`));
-        }
-        
-        if (activeDate) {
-          esc.push(...encoder.encode(`${activeDate}\n`));
-        }
-
-        if (lastBilledInfo && lastBilledInfo.display) {
-          esc.push(...encoder.encode(`LAST BILL: ${lastBilledInfo.display}\n`));
-        }
-        
+        esc.push(...encoder.encode(`${nameStr} ${cityStr}\n`));
+        if (activeDate) esc.push(...encoder.encode(`${activeDate}\n`));
+        if (lastBilledInfo?.display) esc.push(...encoder.encode(`LAST BILL: ${lastBilledInfo.display}\n`));
         esc.push(...encoder.encode("--------------------------------\n"));
         
-        esc.push(0x1B, 0x61, 0x00); // Left align
-        const sortedItems = [...itemsList].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
-        
+        esc.push(0x1B, 0x61, 0x00);
         let sumTotal = 0;
-        sortedItems.forEach((item, index) => {
+        itemsList.forEach((item, index) => {
           const itemAmt = getItemTotalAmount(item);
           sumTotal += itemAmt;
-
-          const nameStr = String(item.name || "").trim().toUpperCase().slice(0, 15);
+          const nStr = String(item.name || "").trim().toUpperCase().slice(0, 15).padEnd(15);
           const qStr = String(Math.round(item.qty || 1)).padEnd(3);
-          const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || 0);
-          const pStr = String(Math.round(unitP)).padStart(4);
+          const pStr = String(Math.round(item.finalUnitPrice || 0)).padStart(4);
           const totalStr = String(Math.round(itemAmt)).padStart(6);
           
-          esc.push(...encoder.encode(`${qStr} ${nameStr.padEnd(15)} ${pStr} ${totalStr}\n`));
-          
-          if (item.code && String(item.code) !== "—") {
-            esc.push(...encoder.encode(`    ${String(item.code).trim()}\n`));
-          }
-
-          if ((index + 1) % 5 === 0 && index !== sortedItems.length - 1) {
-            esc.push(...encoder.encode("................................\n"));
-          }
+          esc.push(...encoder.encode(`${qStr} ${nStr} ${pStr} ${totalStr}\n`));
         });
 
         esc.push(...encoder.encode("--------------------------------\n"));
@@ -1626,17 +1406,10 @@
         }
         esc.push(...encoder.encode(`TOTAL:                   ${Math.round(finalGrandTotal)}\n\n`));
 
-        // Custom Thank You Message
         const footerLines = String(printSettings?.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
-        esc.push(0x1B, 0x61, 0x01); // Center
-        footerLines.forEach(line => {
-          if (line.trim()) {
-            esc.push(...encoder.encode(`${line.trim()}\n`));
-          }
-        });
-        esc.push(...encoder.encode("\n\n"));
-
-        esc.push(0x1D, 0x56, 0x42, 0x00); // Cut paper
+        esc.push(0x1B, 0x61, 0x01);
+        footerLines.forEach(line => { if (line.trim()) esc.push(...encoder.encode(`${line.trim()}\n`)); });
+        esc.push(...encoder.encode("\n\n\n"));
 
         const bytes = new Uint8Array(esc);
         for (let i = 0; i < bytes.length; i += 20) {
@@ -1644,50 +1417,16 @@
         }
       };
 
-      const autocompleteQueryLocal = getParserAutocompleteQueryLocal();
-      const suggestionsLocal = autocompleteQueryLocal ? mostTypedProducts.filter(p => p && p.name && p.name.toLowerCase().includes(autocompleteQueryLocal.toLowerCase())).slice(0, 5) : [];
+      const filteredSheetsCustomers = customerName.trim() === "" ? [] : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
 
-      const filteredSheetsCustomers = customerName.trim() === "" 
-        ? [] 
-        : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
-
-      // 2-Day Report Breakdown (Today & Yesterday)
-      const twoDaysReportBills = useMemo(() => {
-        const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-        const twoDaysAgoStart = todayStart - (1 * 24 * 60 * 60 * 1000);
-
-        return cloudBills.filter(b => {
-          const custNameLower = getNormalizedKey(getTxnName(b));
-          const isWalkIn = custNameLower === "walk-in customer" || custNameLower === "walkin" || custNameLower === "" || custNameLower === "walk in";
-          if (isWalkIn) return false;
-
-          const bId = getTxnId(b);
-          const bDate = getTxnDate(b);
-          const bTime = bId ? Number(bId) : new Date(bDate || 0).getTime();
-          return bTime >= twoDaysAgoStart;
-        });
-      }, [cloudBills]);
-
-      // Date Range Bill Report Filtering
       const filteredReportBills = useMemo(() => {
-        if (reportPreset === "2days") {
-          return twoDaysReportBills;
-        }
-
-        let startMs = 0;
-        let endMs = Infinity;
-
+        let startMs = 0, endMs = Infinity;
         if (reportPreset === "today") {
           const today = new Date().toISOString().split('T')[0];
-          startMs = new Date(today).getTime();
-          endMs = startMs + (24 * 60 * 60 * 1000);
-        } else if (reportPreset === "last7") {
+          startMs = new Date(today).getTime(); endMs = startMs + (24 * 60 * 60 * 1000);
+        } else if (reportPreset === "last7" || reportPreset === "2days") {
           endMs = Date.now() + (24 * 60 * 60 * 1000);
-          startMs = Date.now() - (7 * 24 * 60 * 60 * 1000);
-        } else if (reportPreset === "last30") {
-          endMs = Date.now() + (24 * 60 * 60 * 1000);
-          startMs = Date.now() - (30 * 24 * 60 * 60 * 1000);
+          startMs = Date.now() - ((reportPreset === "2days" ? 2 : 7) * 24 * 60 * 60 * 1000);
         } else if (reportPreset === "custom") {
           if (reportStartDate) startMs = new Date(reportStartDate).getTime();
           if (reportEndDate) endMs = new Date(reportEndDate).getTime() + (24 * 60 * 60 * 1000);
@@ -1695,19 +1434,16 @@
 
         return cloudBills.filter(b => {
           const custNameLower = getNormalizedKey(getTxnName(b));
-          const isWalkIn = custNameLower === "walk-in customer" || custNameLower === "walkin" || custNameLower === "" || custNameLower === "walk in";
-          if (isWalkIn) return false;
-
+          if (["walk-in customer", "walkin", "", "walk in"].includes(custNameLower)) return false;
           const bId = getTxnId(b);
-          const bDate = getTxnDate(b);
-          const bTime = bId ? Number(bId) : new Date(bDate || 0).getTime();
+          const bTime = bId ? Number(bId) : new Date(getTxnDate(b) || 0).getTime();
           return bTime >= startMs && bTime <= endMs;
         });
-      }, [cloudBills, reportPreset, reportStartDate, reportEndDate, twoDaysReportBills]);
+      }, [cloudBills, reportPreset, reportStartDate, reportEndDate]);
 
       const handlePrintDateRangeReport = () => {
         if (filteredReportBills.length === 0) {
-          triggerNotification("No registered customer bills found in this range.");
+          triggerNotification("No registered customer bills found.");
           return;
         }
 
@@ -1715,9 +1451,9 @@
 
         let reportHTML = `
           <div class="text-center pb-4 mb-4 border-b-4 border-black font-mono">
-            <h2 class="text-[32px] font-black uppercase tracking-wider">REGISTERED CUSTOMERS LEDGER</h2>
-            <p class="text-[18px] font-bold">Summary Report (${reportPreset.toUpperCase()})</p>
-            <p class="text-[16px] font-bold mt-1">Total Valid Transactions: ${filteredReportBills.length}</p>
+            <h2 class="text-[30px] font-black uppercase">REGISTERED CUSTOMERS LEDGER</h2>
+            <p class="text-[18px] font-bold">Summary (${reportPreset.toUpperCase()})</p>
+            <p class="text-[16px] font-bold mt-1">Total Bills: ${filteredReportBills.length}</p>
           </div>
           <table class="w-full text-left mt-4 border-collapse text-[22px] font-mono font-bold">
             <thead>
@@ -1731,53 +1467,38 @@
         `;
 
         filteredReportBills.forEach((b, idx) => {
-          const bName = getTxnName(b);
+          const bName = formatCustomerNameJI(getTxnName(b));
           const bCity = b.customerCity || b.city;
           const bAmt = getTxnAmount(b);
-          const bDate = getTxnDate(b);
-
-          const displayAmtStr = isVerified ? `₹${Math.round(bAmt)}` : encodeKanpurcity(bAmt);
+          const bDate = formatDDMM(getTxnDate(b));
 
           reportHTML += `
             <tr class="border-b border-stone-300 py-2">
-              <td class="py-2 text-stone-700">${bDate || "—"}</td>
+              <td class="py-2 text-stone-700">${bDate}</td>
               <td class="py-2 uppercase font-black">${bName} (${bCity ? getCityCode(bCity) : "LOCA"})</td>
-              <td class="py-2 text-right font-black">${displayAmtStr}</td>
+              <td class="py-2 text-right font-black">₹${Math.round(bAmt)}</td>
             </tr>
           `;
-
-          if ((idx + 1) % 5 === 0 && idx !== filteredReportBills.length - 1) {
-            reportHTML += `
-              <tr>
-                <td colspan="3" class="py-1 border-b-2 border-dotted border-stone-400"></td>
-              </tr>
-            `;
-          }
         });
-
-        const totalDisplayStr = isVerified ? `₹${Math.round(totalRevenue)}` : encodeKanpurcity(totalRevenue);
 
         reportHTML += `
             </tbody>
           </table>
           <div class="mt-6 pt-4 border-t-4 border-black text-right text-[28px] font-mono font-black">
-            Total Revenue: ${totalDisplayStr}
+            Total Revenue: ₹${Math.round(totalRevenue)}
           </div>
         `;
 
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           printBody.innerHTML = reportHTML;
-          setTimeout(() => {
-            window.print();
-          }, 200);
+          setTimeout(() => window.print(), 200);
         }
       };
 
       return (
         <div className="h-screen w-full flex flex-col bg-stone-100 overflow-hidden relative font-sans text-stone-900">
           
-          {/* Bluetooth Disconnection Red Warning Bar */}
           {bleStatus !== "Connected" && (
             <div className="bg-rose-600 text-white py-1 px-4 text-center text-[10px] font-black uppercase tracking-wider no-print flex-shrink-0 z-50 flex items-center justify-center gap-1.5 shadow-sm">
               <i className="fa-brands fa-bluetooth text-xs animate-pulse"></i>
@@ -1785,7 +1506,6 @@
             </div>
           )}
 
-          {/* Offline Pending Sync Warning Bar */}
           {(!isOnline || pendingSyncCount > 0) && (
             <div className="bg-amber-500 text-stone-950 py-1 px-4 text-center text-[10px] font-black uppercase tracking-wider no-print flex-shrink-0 z-50 flex items-center justify-center gap-2 border-b border-amber-600 shadow-sm">
               <i className="fa-solid fa-wifi text-xs"></i>
@@ -1802,7 +1522,7 @@
             </div>
           )}
 
-          {/* New Bill Confirmation Modal */}
+          {/* New Bill Confirm Modal */}
           {showNewBillConfirmModal && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-slide-up no-print">
               <div className="bg-white rounded-xl p-5 max-w-xs w-full shadow-2xl space-y-4 text-center border border-stone-300">
@@ -1811,33 +1531,42 @@
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-stone-900 uppercase">Start New Bill?</h3>
-                  <p className="text-xs text-stone-500 mt-1">Current customer fields, draft items, and bagged items will be cleared.</p>
+                  <p className="text-xs text-stone-500 mt-1">Clears current draft items and customer selection.</p>
                 </div>
                 <div className="flex gap-2">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowNewBillConfirmModal(false)} 
-                    className="flex-1 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-lg text-xs uppercase"
-                  >
-                    Cancel
-                  </button>
-                  <button 
-                    type="button" 
-                    onClick={() => {
-                      setShowNewBillConfirmModal(false);
-                      handleResetAll();
-                      triggerNotification("✓ Form reset - Ready for new bill!");
-                    }} 
-                    className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-lg text-xs uppercase shadow-sm"
-                  >
-                    New Bill
-                  </button>
+                  <button type="button" onClick={() => setShowNewBillConfirmModal(false)} className="flex-1 py-2 bg-stone-100 text-stone-700 font-bold rounded-lg text-xs uppercase">Cancel</button>
+                  <button type="button" onClick={() => { setShowNewBillConfirmModal(false); handleResetAll(); triggerNotification("✓ New bill draft started!"); }} className="flex-1 py-2 bg-rose-600 text-white font-black rounded-lg text-xs uppercase">New Bill</button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Delete Bill Confirmation Modal */}
+          {/* Worker Slip Modal */}
+          {showWorkerSlipModal && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-slide-up no-print">
+              <div className="bg-white rounded-xl p-4 max-w-sm w-full shadow-2xl space-y-3 border border-stone-300">
+                <div className="flex justify-between items-center border-b pb-2">
+                  <h3 className="font-black text-xs text-stone-900 uppercase flex items-center gap-1.5">
+                    <i className="fa-solid fa-clipboard-list text-amber-500"></i> Worker Gathering Slip
+                  </h3>
+                  <button type="button" onClick={() => setShowWorkerSlipModal(false)} className="text-stone-400 text-sm"><i className="fa-solid fa-xmark"></i></button>
+                </div>
+                <textarea 
+                  rows="5"
+                  placeholder="Type order notes for worker e.g. 5 chura, 2 sehra..."
+                  value={workerNoteInput}
+                  onChange={(e) => setWorkerNoteInput(e.target.value)}
+                  className="w-full text-xs p-2 border rounded-lg font-mono font-bold bg-stone-50 focus:outline-none"
+                ></textarea>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { setWorkerNoteInput(baggedItems.map(i => `${Math.round(i.qty)} ${i.name}`).join("\n")); }} className="px-3 py-2 bg-stone-100 text-stone-700 font-bold rounded-lg text-xs">Fill Draft Items</button>
+                  <button type="button" onClick={() => { handlePrintWorkerSlip(); setShowWorkerSlipModal(false); }} className="flex-1 py-2 bg-stone-900 text-white font-black rounded-lg text-xs uppercase"><i className="fa-solid fa-print"></i> Print Slip</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Delete Bill Modal */}
           {billToDelete && (
             <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-slide-up no-print">
               <div className="bg-white rounded-xl p-5 max-w-xs w-full shadow-2xl space-y-4 text-center border border-stone-300">
@@ -1846,58 +1575,40 @@
                 </div>
                 <div>
                   <h3 className="font-extrabold text-sm text-stone-900 uppercase">Delete Bill Confirmation</h3>
-                  <p className="text-xs text-stone-500 mt-1">Are you sure you want to delete bill <span className="font-mono font-bold text-stone-800">#{getTxnId(billToDelete)}</span> for <span className="font-bold text-stone-900">{getTxnName(billToDelete)}</span>?</p>
+                  <p className="text-xs text-stone-500 mt-1">Delete bill <span className="font-mono font-bold text-stone-800">#{getTxnId(billToDelete)}</span>?</p>
                 </div>
                 <div className="flex gap-2">
-                  <button 
-                    type="button" 
-                    onClick={() => setBillToDelete(null)} 
-                    className="flex-1 py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-lg text-xs uppercase"
-                  >
-                    Cancel
-                  </button>
-                  <button 
-                    type="button" 
-                    onClick={async () => {
-                      const idToDelete = getTxnId(billToDelete);
-                      setBillToDelete(null);
-                      setCloudBills(prev => prev.filter(b => String(getTxnId(b)) !== String(idToDelete)));
-                      try {
-                        await window.firebaseBridge.deleteTxnFromCloud(idToDelete, activeScriptUrl);
-                        triggerNotification("✓ Bill deleted successfully!");
-                      } catch(e) {
-                        triggerNotification("Error deleting bill.");
-                      }
-                    }} 
-                    className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-lg text-xs uppercase shadow-sm"
-                  >
-                    Delete
-                  </button>
+                  <button type="button" onClick={() => setBillToDelete(null)} className="flex-1 py-2 bg-stone-100 text-stone-700 font-bold rounded-lg text-xs uppercase">Cancel</button>
+                  <button type="button" onClick={async () => {
+                    const idToDelete = getTxnId(billToDelete);
+                    setBillToDelete(null);
+                    setCloudBills(prev => prev.filter(b => String(getTxnId(b)) !== String(idToDelete)));
+                    try { await window.firebaseBridge.deleteTxnFromCloud(idToDelete, activeScriptUrl); triggerNotification("✓ Bill deleted!"); } catch(e) {}
+                  }} className="flex-1 py-2 bg-rose-600 text-white font-black rounded-lg text-xs uppercase">Delete</button>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Top Bar / Customer Selection & Include Last Balance Toggle */}
+          {/* Top Bar with FIXED 15% Customer Name Field */}
           <div className="bg-white p-2 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm flex-shrink-0">
             <div className="flex gap-1.5 items-center font-sans h-11">
-              <button type="button" onClick={() => setShowNewBillConfirmModal(true)} title="New Bill Reset" className="h-10 w-10 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-black shadow-xs active:scale-95 transition-all"><i className="fa-solid fa-plus-circle text-lg"></i></button>
-              <button type="button" onClick={syncDataFromGoogleSheets} title="Sync Customer Database" className="h-10 w-10 flex items-center justify-center bg-stone-100 border text-stone-700 rounded-lg shadow-xs"><i className="fa-solid fa-sync"></i></button>
+              <button type="button" onClick={() => setShowNewBillConfirmModal(true)} title="New Bill Reset" className="h-10 w-10 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-black shadow-xs active:scale-95 flex-shrink-0"><i className="fa-solid fa-plus-circle text-lg"></i></button>
+              <button type="button" onClick={syncDataFromGoogleSheets} title="Sync Customer Database" className="h-10 w-10 flex items-center justify-center bg-stone-100 border text-stone-700 rounded-lg shadow-xs flex-shrink-0"><i className="fa-solid fa-sync"></i></button>
               
-              <div className="flex-grow min-w-0 relative" ref={custRef}>
+              {/* Customer Name field set to FIXED ~15-20% horizontal ratio */}
+              <div className="w-[20%] min-w-[75px] relative flex-shrink-0" ref={custRef}>
                 <input 
                   type="text" 
                   autoComplete="off"
-                  autoCorrect="off"
-                  spellCheck="false"
-                  placeholder="Search Customer..."
+                  placeholder="Customer..."
                   value={customerName}
                   onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
                   onFocus={() => setShowCustSuggestions(true)}
-                  className="w-full px-2.5 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg font-bold focus:border-stone-800 focus:outline-none"
+                  className="w-full px-2 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg font-bold focus:border-stone-800 focus:outline-none"
                 />
                 {showCustSuggestions && filteredSheetsCustomers.length > 0 && (
-                  <div className="absolute top-full mt-1 left-0 right-0 max-h-40 overflow-y-auto bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
+                  <div className="absolute top-full mt-1 left-0 w-48 overflow-y-auto max-h-40 bg-white border border-stone-300 rounded shadow-lg z-50 divide-y divide-stone-50 animate-slide-up">
                     {filteredSheetsCustomers.map((c, i) => (
                       <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-2 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
                         <span>{c.name}</span>
@@ -1913,11 +1624,10 @@
                 placeholder="City" 
                 value={customerCity} 
                 onChange={e => setCustomerCity(e.target.value)} 
-                className="w-14 px-1 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold uppercase"
+                className="w-12 px-1 py-1.5 h-10 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none font-bold uppercase flex-shrink-0"
               />
               
-              {/* Default X% = 15 */}
-              <div className="flex items-center gap-0.5">
+              <div className="flex items-center gap-0.5 flex-shrink-0">
                 <span className="text-[8px] text-stone-400 font-black">X%:</span>
                 <input 
                   type="number" 
@@ -1929,17 +1639,14 @@
                 />
               </div>
 
-              {/* Include Last Balance Checkbox & Explicit Fetch Button */}
-              <div className="flex items-center gap-0.5">
-                <label title="Include Customer's Last Balance" className={`px-1.5 py-1 h-10 rounded-l-lg border text-[9px] font-black uppercase flex items-center gap-1 cursor-pointer transition-colors ${includeLastBalance ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-stone-50 text-stone-500 border-stone-200'}`}>
+              <div className="flex items-center gap-0.5 flex-grow">
+                <label className={`px-1.5 py-1 h-10 rounded-l-lg border text-[9px] font-black uppercase flex items-center gap-1 cursor-pointer transition-colors ${includeLastBalance ? 'bg-amber-100 text-amber-900 border-amber-300' : 'bg-stone-50 text-stone-500 border-stone-200'}`}>
                   <input 
                     type="checkbox" 
                     checked={includeLastBalance} 
                     onChange={(e) => {
                       setIncludeLastBalance(e.target.checked);
-                      if (e.target.checked && customerName.trim()) {
-                        fetchLastBalanceInBackground(customerName, false);
-                      }
+                      if (e.target.checked && customerName.trim()) fetchLastBalanceInBackground(customerName, false);
                     }} 
                     className="h-3.5 w-3.5 rounded text-amber-600 focus:ring-0 cursor-pointer"
                   />
@@ -1948,44 +1655,46 @@
                 <button 
                   type="button" 
                   onClick={() => {
-                    if (customerName.trim()) {
-                      setIncludeLastBalance(true);
-                      fetchLastBalanceInBackground(customerName, true);
-                    } else {
-                      triggerNotification("Please select a customer first.");
-                    }
+                    if (customerName.trim()) { setIncludeLastBalance(true); fetchLastBalanceInBackground(customerName, true); }
+                    else triggerNotification("Select customer first.");
                   }} 
-                  title="Fetch Latest Balance from Sheets"
-                  className="h-10 px-1.5 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-r-lg text-xs font-black border border-amber-400 flex items-center justify-center active:scale-95"
+                  title="Fetch Last Balance"
+                  className="h-10 px-1.5 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-r-lg text-xs font-black border border-amber-400 flex items-center justify-center"
                 >
                   <i className={`fa-solid fa-sync ${isFetchingLastBalance ? 'fa-spin' : ''}`}></i>
                 </button>
               </div>
 
-              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-1.5 h-10 rounded-lg text-[8px] font-black tracking-wider flex items-center gap-0.5 transition-colors ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600 border'}`}>
+              <button type="button" onClick={connectBluetoothPrinter} className={`px-2 py-1.5 h-10 rounded-lg text-[8px] font-black tracking-wider flex items-center gap-0.5 transition-colors flex-shrink-0 ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600 border'}`}>
                 <i className="fa-brands fa-bluetooth text-sm"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
               </button>
             </div>
           </div>
 
-          {/* MAIN INTERFACE TAB VIEWS */}
           <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-2 flex flex-col gap-2 overflow-hidden bg-stone-50 no-print">
             
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-2 overflow-hidden min-h-0">
                 
-                {/* Directory Shortcuts (Sorted by Most Typed First) */}
+                {/* Directory Shortcuts (Keyboard stays open on touch) */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider mb-1">Directory Shortcuts (Most Typed First)</span>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-[8px] font-black text-stone-400 uppercase tracking-wider">Directory Shortcuts</span>
+                    <button type="button" onClick={() => setShowWorkerSlipModal(true)} className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 py-0.5 rounded border border-amber-300">
+                      <i className="fa-solid fa-clipboard-list"></i> Worker Slip
+                    </button>
+                  </div>
                   <div className="flex gap-1 overflow-x-auto pb-1 custom-scroll">
                     {mostTypedProducts.map(p => (
-                      <button key={p.id || p.name} type="button" onClick={() => {
-                        setParserInput(prev => {
-                          const m = prev.match(/^\d+(\.\d+)?\s+/);
-                          return `${m ? m[0] : "1 "}${p.name} `;
-                        });
-                        if (parserRef.current) parserRef.current.focus();
-                      }} className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-[11px] font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-xs">{p.name}</button>
+                      <button 
+                        key={p.id || p.name} 
+                        type="button" 
+                        onMouseDown={(e) => selectParserSuggestion(p.name, e)}
+                        onTouchStart={(e) => selectParserSuggestion(p.name, e)}
+                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg text-[11px] font-bold text-stone-800 whitespace-nowrap active:scale-95 transition-all shadow-xs"
+                      >
+                        {p.name}
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -1998,8 +1707,6 @@
                         ref={parserRef} 
                         type="text" 
                         autoComplete="off"
-                        autoCorrect="off"
-                        spellCheck="false"
                         placeholder="Fast Draft e.g. 12 sehra 40n or 120n" 
                         value={parserInput} 
                         onChange={e => setParserInput(e.target.value)} 
@@ -2015,7 +1722,6 @@
                         <div className="absolute inset-0 px-3 py-2 h-11 text-xs font-mono font-black flex items-center pointer-events-none z-0 overflow-hidden whitespace-pre">
                           <span className="opacity-0">{parserInput}</span>
                           <span className="text-stone-400 opacity-60 bg-amber-100/50 px-0.5 rounded">{autocompleteSuggestion}</span>
-                          <span className="text-[9px] text-amber-700 ml-1.5 font-sans font-bold">[Press Tab / →]</span>
                         </div>
                       )}
                     </div>
@@ -2026,21 +1732,13 @@
                       disabled={baggedItems.length === 0}
                       className={`h-11 px-3.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm transition-all ${baggedItems.length > 0 ? 'bg-stone-900 hover:bg-black text-white' : 'bg-stone-200 text-stone-400 cursor-not-allowed'}`}
                     >
-                      <i className="fa-solid fa-print"></i> Print
+                      <i className="fa-solid fa-print"></i> PRINT
                     </button>
                   </form>
-
-                  {suggestionsLocal.length > 0 && (
-                    <div className="absolute left-1 right-20 top-full mt-1 max-h-36 overflow-y-auto bg-white/95 backdrop-blur-md border border-stone-300 shadow-xl rounded-lg z-50 divide-y divide-stone-100">
-                      {suggestionsLocal.map(p => (
-                        <div key={p.id || p.name} onMouseDown={() => selectParserSuggestion(p.name)} className="px-3 py-2 text-xs font-bold hover:bg-stone-100 text-stone-900 cursor-pointer">{p.name}</div>
-                      ))}
-                    </div>
-                  )}
                 </div>
 
-                {/* BAGGED ITEMS LIST: GROUPED IN ULTRA-COMPACT SINGLE LINE FORMAT */}
-                <div className="flex-grow overflow-y-auto custom-scroll space-y-2.5 pr-0.5 min-h-0 flex-1">
+                {/* BAGGED ITEMS LIST: PREPENDED AT TOP & COMPACT */}
+                <div ref={baggedListRef} className="flex-grow overflow-y-auto custom-scroll space-y-2.5 pr-0.5 min-h-0 flex-1">
                   
                   {baggedItems.length === 0 ? (
                     <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border border-dashed shadow-xs">
@@ -2048,14 +1746,12 @@
                     </div>
                   ) : (
                     <>
-                      {/* GROUPED BAGGED ITEMS */}
                       {groupedBaggedItems.map(group => {
                         const defaultGroupLessVal = groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "10";
 
                         return (
                           <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-1.5 space-y-1.5 shadow-xs animate-slide-up">
                             
-                            {/* Single-Line Group Header */}
                             <div className="bg-stone-900 text-white px-2 py-1.5 rounded-lg flex items-center justify-between gap-1 text-xs shadow-xs">
                               <div className="flex items-center gap-1.5 min-w-0 flex-shrink truncate">
                                 <span className="font-black text-xs uppercase tracking-wider text-amber-300 truncate">{group.displayName}</span>
@@ -2068,7 +1764,6 @@
                                 <span className="text-[9px] font-black text-amber-200 uppercase">Less:</span>
                                 <input 
                                   type="number" 
-                                  inputMode="decimal"
                                   placeholder="10" 
                                   value={defaultGroupLessVal} 
                                   onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
@@ -2078,25 +1773,22 @@
                                 <button 
                                   type="button" 
                                   onClick={() => applyGroupLessDiscount(group.key, defaultGroupLessVal)} 
-                                  className="px-2 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[10px] font-black uppercase rounded h-7 active:scale-95 transition-all"
+                                  className="px-2 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[10px] font-black uppercase rounded h-7 active:scale-95"
                                 >
                                   Apply
                                 </button>
                               </div>
                             </div>
 
-                            {/* Touch-Friendly Child Item Rows (STRICT 1-LINE NON-WRAPPING LAYOUT) */}
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
                                 <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded border border-stone-200 flex-nowrap overflow-hidden">
                                   
                                   <div className="flex items-center gap-1 font-mono flex-nowrap flex-grow min-w-0">
-                                    {/* Qty Box */}
                                     <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-stone-400 uppercase">Q:</span>
                                       <input 
                                         type="number" 
-                                        inputMode="decimal"
                                         value={item.qty} 
                                         onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
@@ -2104,7 +1796,6 @@
                                       />
                                     </div>
 
-                                    {/* Code Box */}
                                     <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-stone-400 uppercase">C:</span>
                                       <input 
@@ -2117,12 +1808,10 @@
                                       />
                                     </div>
 
-                                    {/* Price Box */}
                                     <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-stone-400 uppercase">P:</span>
                                       <input 
                                         type="number" 
-                                        inputMode="decimal"
                                         value={Math.round(item.basePrice)} 
                                         onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
                                         onFocus={(e) => e.target.select()}
@@ -2130,12 +1819,10 @@
                                       />
                                     </div>
 
-                                    {/* Less Box (Default 0) */}
                                     <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1 py-0.5 rounded h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-rose-500 uppercase">L:</span>
                                       <input 
                                         type="text" 
-                                        inputMode="decimal"
                                         placeholder="0" 
                                         value={item.less === "—" ? "" : item.less} 
                                         onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
@@ -2144,13 +1831,11 @@
                                       />
                                     </div>
 
-                                    {/* Amount - STRICTLY ON SAME LINE */}
                                     <div className="flex-grow text-right font-black text-stone-900 text-xs whitespace-nowrap px-1">
                                       ₹{Math.round(getItemTotalAmount(item))}
                                     </div>
                                   </div>
 
-                                  {/* Delete button */}
                                   <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1 text-sm flex-shrink-0 h-8 flex items-center justify-center">
                                     <i className="fa-solid fa-xmark"></i>
                                   </button>
@@ -2163,7 +1848,6 @@
                         );
                       })}
 
-                      {/* Grand Total Summary Card */}
                       <div className="bg-white p-2.5 border rounded-xl space-y-1 shadow-xs font-sans text-xs">
                         <div className="flex justify-between items-center text-stone-600 font-bold">
                           <span>Current Bill Amount:</span>
@@ -2192,7 +1876,6 @@
               </div>
             )}
 
-            {/* CATALOG & MERGE PRODUCTS TAB */}
             {currentTab === "products" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
                 <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0 shadow-xs">
@@ -2205,89 +1888,9 @@
                     onChange={e => setNewProdNameState(e.target.value)} 
                     className="w-full px-2.5 h-9 text-xs border rounded-lg font-bold focus:outline-none"
                   />
-                  <button type="submit" className="w-full py-2 bg-stone-900 text-white text-xs font-bold rounded-lg transition-colors">Save Product</button>
+                  <button type="submit" className="w-full py-2 bg-stone-900 text-white text-xs font-bold rounded-lg">Save Product</button>
                 </form>
 
-                {/* Merge Products Tool */}
-                {selectedCatalogProduct && (
-                  <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-2 animate-slide-up text-xs shadow-xs">
-                    <div className="flex justify-between items-center">
-                      <span className="font-extrabold text-amber-900">Merge Product: <span className="uppercase text-stone-900">{selectedCatalogProduct.name}</span></span>
-                      <button type="button" onClick={() => { setSelectedCatalogProduct(null); setMergeTargetSearch(""); }} className="text-[10px] text-stone-500 underline font-bold">Cancel</button>
-                    </div>
-                    <p className="text-[10px] text-amber-800 leading-tight">All instances of this product will be permanently merged into the target product name below.</p>
-                    <div className="relative">
-                      <input 
-                        type="text"
-                        placeholder="Search target correct product name..."
-                        value={mergeTargetSearch}
-                        onChange={(e) => { setMergeTargetSearch(e.target.value); setShowMergeTargetSuggestions(true); }}
-                        onFocus={() => setShowMergeTargetSuggestions(true)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg font-bold text-stone-800 focus:outline-none"
-                      />
-                      {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
-                        <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 mt-1">
-                          {mostTypedProducts
-                            .filter(p => getNormalizedKey(p.name) !== getNormalizedKey(selectedCatalogProduct.name) && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
-                            .slice(0, 5)
-                            .map(p => (
-                              <div 
-                                key={p.id || p.name}
-                                onMouseDown={() => {
-                                  setMergeTargetSearch(p.name);
-                                  setShowMergeTargetSuggestions(false);
-                                }}
-                                className="px-2.5 py-1.5 hover:bg-stone-100 cursor-pointer font-bold uppercase text-[11px] text-stone-800"
-                              >
-                                {p.name}
-                              </div>
-                            ))}
-                        </div>
-                      )}
-                    </div>
-                    <button 
-                      type="button"
-                      onClick={async () => {
-                        const target = mergeTargetSearch.trim();
-                        if (!target) {
-                          triggerNotification("Please select/search a target product.");
-                          return;
-                        }
-                        const targetItem = mostTypedProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
-                        if (!targetItem) {
-                          triggerNotification("Target product must exist in catalog.");
-                          return;
-                        }
-
-                        const oldName = selectedCatalogProduct.name;
-                        const oldKey = getNormalizedKey(oldName);
-
-                        addDeletedProductKey(oldKey);
-
-                        try {
-                          await window.firebaseBridge.deleteProductFromCloud(oldName, activeScriptUrl);
-                          
-                          const updatedProds = cloudProducts.filter(p => getNormalizedKey(p.name) !== oldKey);
-                          setCloudProducts(updatedProds);
-                          idbStorage.cacheProducts(updatedProds);
-                          
-                          setBaggedItems(prev => prev.map(item => getNormalizedKey(item.name) === oldKey ? { ...item, name: targetItem.name } : item));
-                          
-                          setSelectedCatalogProduct(null);
-                          setMergeTargetSearch("");
-                          triggerNotification(`✓ Permanently merged "${oldName}" into "${targetItem.name}"!`);
-                        } catch(e) {
-                          console.error(e);
-                        }
-                      }}
-                      className="w-full py-1.5 bg-amber-600 text-white rounded-lg font-bold text-xs shadow-xs"
-                    >
-                      Execute Product Merge
-                    </button>
-                  </div>
-                )}
-
-                {/* Filter Product Catalog */}
                 <div className="bg-white p-2 border rounded-xl space-y-1 shadow-xs">
                   <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
                   <input 
@@ -2299,265 +1902,118 @@
                   />
                 </div>
 
-                {/* Catalog List */}
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-60 overflow-y-auto custom-scroll shadow-xs">
                   {mostTypedProducts
                     .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
                     .map(p => (
-                      <div 
-                        key={p.id || p.name} 
-                        className={`flex justify-between items-center py-1.5 px-2 text-xs font-bold rounded cursor-pointer ${selectedCatalogProduct?.id === p.id ? 'bg-amber-100 text-stone-900' : 'hover:bg-stone-50'}`}
-                        onClick={() => setSelectedCatalogProduct(p)}
-                      >
+                      <div key={p.id || p.name} className="flex justify-between items-center py-1.5 px-2 text-xs font-bold rounded">
                         <span className="uppercase text-stone-800">{p.name}</span>
-                        <div className="flex gap-2">
-                          <button 
-                            type="button" 
-                            onClick={(e) => { e.stopPropagation(); setSelectedCatalogProduct(p); }} 
-                            className="text-indigo-500 hover:text-indigo-700 font-black uppercase text-[10px]"
-                          >
-                            Merge
-                          </button>
-                          <button 
-                            type="button" 
-                            onClick={(e) => { e.stopPropagation(); handleCatalogDelete(p.name); }} 
-                            className="text-stone-300 hover:text-rose-600 transition-colors"
-                          >
-                            <i className="fa-solid fa-trash-can"></i>
-                          </button>
-                        </div>
+                        <button type="button" onClick={() => handleCatalogDelete(p.name)} className="text-stone-300 hover:text-rose-600"><i className="fa-solid fa-trash-can"></i></button>
                       </div>
                   ))}
                 </div>
               </div>
             )}
 
-            {/* HISTORIC & 2-DAY REPORT TAB */}
+            {/* HISTORIC TAB (LAST 7 DAYS ONLY & EMPTY 2-MIN UNLOCK FIELD) */}
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 
-                {/* 2-DAY REPORT BREAKDOWN */}
                 <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
                   <div className="flex justify-between items-center border-b pb-1">
-                    <span className="text-[10px] font-black uppercase text-stone-700 tracking-wider">2-Day Ledger Report</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${isVerified ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-900'}`}>
-                        {isVerified ? 'Original Unlocked' : 'Ciphertext Mode'}
-                      </span>
-                      {isVerified && (
-                        <button 
-                          type="button" 
-                          onClick={() => { setIsVerified(false); setPasswordInput(""); triggerNotification("🔒 Ledger locked!"); }}
-                          className="px-2 py-0.5 bg-stone-800 hover:bg-stone-950 text-amber-400 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1 shadow-xs active:scale-95"
-                        >
-                          <i className="fa-solid fa-lock text-[9px]"></i> Lock
-                        </button>
-                      )}
-                    </div>
+                    <span className="text-[10px] font-black uppercase text-stone-700 tracking-wider">Ledger Summary</span>
+                    <button type="button" onClick={handlePrintDateRangeReport} className="px-2.5 py-1 bg-amber-500 text-stone-950 font-black rounded text-[10px] uppercase"><i className="fa-solid fa-print"></i> Print Report</button>
                   </div>
 
                   <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
-                    {[
-                      { key: "2days", label: "2 Days" },
-                      { key: "today", label: "Today" },
-                      { key: "last7", label: "7 Days" },
-                      { key: "custom", label: "Custom" }
-                    ].map(preset => (
-                      <button 
-                        key={preset.key}
-                        type="button"
-                        onClick={() => setReportPreset(preset.key)}
-                        className={`py-1 rounded text-center uppercase border transition-all ${reportPreset === preset.key ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}
-                      >
-                        {preset.label}
-                      </button>
+                    {[{ key: "2days", label: "2 Days" }, { key: "today", label: "Today" }, { key: "last7", label: "7 Days" }, { key: "custom", label: "Custom" }].map(preset => (
+                      <button key={preset.key} type="button" onClick={() => setReportPreset(preset.key)} className={`py-1 rounded text-center uppercase border ${reportPreset === preset.key ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}>{preset.label}</button>
                     ))}
                   </div>
 
-                  {reportPreset === "custom" && (
-                    <div className="grid grid-cols-2 gap-1.5 pt-1">
-                      <div>
-                        <span className="text-[8px] font-black text-stone-400 uppercase">From:</span>
-                        <input type="date" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
-                      </div>
-                      <div>
-                        <span className="text-[8px] font-black text-stone-400 uppercase">To:</span>
-                        <input type="date" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex justify-between items-center pt-1 border-t">
-                    <span className="text-xs font-bold text-stone-800">Valid Bills: <span className="font-mono text-amber-600 font-black">{filteredReportBills.length}</span></span>
-                    <button 
-                      type="button" 
-                      onClick={handlePrintDateRangeReport} 
-                      className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-stone-950 font-black rounded text-xs uppercase flex items-center gap-1 shadow-xs"
-                    >
-                      <i className="fa-solid fa-print"></i> Print Report
-                    </button>
-                  </div>
-
-                  {/* Passcode Prompt for Original Amounts */}
-                  {!isVerified && (
-                    <div className="bg-amber-50 border border-amber-200 rounded p-2 text-center space-y-1.5">
-                      <div className="text-[10px] font-extrabold text-amber-900 uppercase">Enter Passcode 'ab' for Original Values</div>
-                      <div className="flex justify-center items-center gap-1">
-                        <input 
-                          type="password" 
-                          placeholder="Passcode..." 
-                          value={passwordInput}
-                          onChange={(e) => {
-                            setPasswordInput(e.target.value);
-                            if (e.target.value === "ab") setIsVerified(true);
-                          }}
-                          className="w-28 text-center p-1 border border-amber-400 rounded text-xs font-mono font-bold bg-white focus:outline-none"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* ON-SCREEN REPORT DISPLAY */}
-                  <div className="mt-2 pt-2 border-t border-dashed border-stone-300">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider mb-1">Breakdown ({reportPreset.toUpperCase()})</span>
-                    {filteredReportBills.length === 0 ? (
-                      <div className="text-center text-[10px] text-stone-400 py-2 italic">No registered customer bills in this period.</div>
-                    ) : (
-                      <div className="max-h-40 overflow-y-auto custom-scroll border rounded bg-stone-50 p-1.5 text-xs font-mono">
-                        <table className="w-full text-left">
-                          <thead>
-                            <tr className="border-b text-[9px] text-stone-500 uppercase font-sans font-bold">
-                              <th className="pb-1">Date</th>
-                              <th className="pb-1">Customer</th>
-                              <th className="pb-1 text-right">Amount</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-stone-200">
-                            {filteredReportBills.map((b, i) => {
-                              const amtVal = getTxnAmount(b);
-                              const amtDisplay = isVerified ? `₹${Math.round(amtVal)}` : encodeKanpurcity(amtVal);
-
-                              return (
-                                <tr key={i} className="text-[10px]">
-                                  <td className="py-1 text-stone-500">{getTxnDate(b) || "—"}</td>
-                                  <td className="py-1 font-bold uppercase text-stone-900 truncate max-w-[120px]">{getTxnName(b)}</td>
-                                  <td className="py-1 text-right font-black tracking-wide">{amtDisplay}</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                        <div className="mt-2 pt-1 border-t-2 border-stone-800 flex justify-between font-black text-xs text-stone-950">
-                          <span>Total Revenue:</span>
-                          <span className="font-mono tracking-wide">
-                            {isVerified ? `₹${Math.round(filteredReportBills.reduce((acc, b) => acc + getTxnAmount(b), 0))}` : encodeKanpurcity(filteredReportBills.reduce((acc, b) => acc + getTxnAmount(b), 0))}
-                          </span>
-                        </div>
-                      </div>
-                    )}
+                  <div className="mt-2 max-h-36 overflow-y-auto custom-scroll border rounded bg-stone-50 p-1.5 text-xs font-mono">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b text-[9px] text-stone-500 uppercase font-sans font-bold">
+                          <th className="pb-1">Date</th>
+                          <th className="pb-1">Customer</th>
+                          <th className="pb-1 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-200">
+                        {filteredReportBills.map((b, i) => (
+                          <tr key={i} className="text-[10px]">
+                            <td className="py-1 text-stone-500">{formatDDMM(getTxnDate(b))}</td>
+                            <td className="py-1 font-bold uppercase text-stone-900 truncate max-w-[120px]">{formatCustomerNameJI(getTxnName(b))}</td>
+                            <td className="py-1 text-right font-black tracking-wide">₹{Math.round(getTxnAmount(b))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 
-                {/* RECENT HISTORIC BILL LOGS WITH RESTORED PREVIEW TOGGLE BUTTON */}
+                {/* HISTORIC BILLS LIST (LAST 7 DAYS ONLY, EMPTY UNLOCK INPUT) */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0 flex-1">
                   <div className="flex justify-between items-center border-b pb-1">
                     <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">
-                      Recent Transactions ({isVerified ? 'Showing 12' : 'Showing 2'})
+                      Historic Bills (Last 7 Days - {isVerified ? 'All' : 'Showing 3'})
                     </span>
-                    <span className="text-[9px] text-stone-400 font-mono">Total: {cloudBills.length}</span>
+                    {/* EMPTY UNLOCK INPUT FIELD (NO PASSCODE WORD) */}
+                    <input 
+                      type="password" 
+                      placeholder="..." 
+                      value={passInput}
+                      onChange={handlePasscodeUnlockInput}
+                      className="w-12 text-center p-0.5 border rounded text-xs font-mono font-bold bg-white focus:outline-none"
+                    />
                   </div>
 
                   <div className="space-y-1.5">
-                    {getSecureLogBills().map(b => {
+                    {visibleHistoricBills.map(b => {
                       const bId = getTxnId(b);
-                      const bName = getTxnName(b);
+                      const bName = formatCustomerNameJI(getTxnName(b));
                       const bCity = b.customerCity || b.city;
                       const bAmt = getTxnAmount(b);
-                      const bDate = getTxnDate(b);
+                      const bDate = formatDDMM(getTxnDate(b));
 
                       return (
                         <div key={bId} className="border bg-white rounded-lg p-2 text-xs space-y-1 animate-slide-up shadow-xs">
                           <div className="flex justify-between font-bold">
-                            <span className="uppercase text-stone-950 truncate max-w-[180px]">{bName} ({bCity && String(bCity).toLowerCase() !== "local" ? getCityCode(bCity) : "LOCA"})</span>
+                            <span className="uppercase text-stone-950 truncate max-w-[180px]">{bName} ({bCity ? getCityCode(bCity) : "LOCA"})</span>
                             <span className="font-mono text-stone-800 font-black">₹{Math.round(bAmt)}</span>
                           </div>
                           <div className="flex justify-between items-center text-[9px] text-stone-400 font-mono border-t pt-1.5 mt-1">
-                            <span>{b.formattedDateTime || bDate}</span>
+                            <span>{bDate}</span>
                             <div className="flex items-center gap-1 flex-wrap">
-                              {/* RESTORED PREVIEW BUTTON */}
-                              <button 
-                                type="button"
-                                onClick={() => toggleLogItemPreview(bId)}
-                                className="px-1.5 py-0.5 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded text-[9px] font-black text-amber-900"
-                              >
+                              <button type="button" onClick={() => toggleLogItemPreview(bId)} className="px-1.5 py-0.5 bg-amber-100 border rounded text-[9px] font-black text-amber-900">
                                 {visibleLogPreviews[bId] ? '- Close' : '+ Preview'}
                               </button>
-
-                              <button 
-                                type="button" 
-                                onClick={() => handleLogsItemPrint(b)} 
-                                className="px-1.5 py-0.5 bg-stone-100 border rounded text-[9px] uppercase font-bold"
-                              >
-                                Print
-                              </button>
-                              <button 
-                                type="button" 
-                                onClick={() => shareBillImage(getTxnItems(b), bName, bCity, bDate)} 
-                                className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 border rounded text-[9px] uppercase font-bold"
-                              >
-                                Share
-                              </button>
-                              <button 
-                                type="button" 
-                                onClick={() => handleLoadHistoricalBill(b)} 
-                                className="px-1.5 py-0.5 bg-stone-900 text-white rounded text-[9px] uppercase font-bold"
-                              >
-                                Load
-                              </button>
-                              <button 
-                                type="button" 
-                                onClick={() => setBillToDelete(b)} 
-                                className="px-1.5 py-0.5 bg-rose-100 hover:bg-rose-200 text-rose-700 border border-rose-300 rounded text-[9px] uppercase font-bold"
-                              >
-                                <i className="fa-solid fa-trash-can text-[9px]"></i>
-                              </button>
+                              <button type="button" onClick={() => handleLogsItemPrint(b)} className="px-1.5 py-0.5 bg-stone-100 border rounded text-[9px] font-bold uppercase">Print</button>
+                              <button type="button" onClick={() => shareBillImage(getTxnItems(b), bName, bCity, bDate)} className="px-1.5 py-0.5 bg-emerald-50 text-emerald-800 border rounded text-[9px] font-bold uppercase">Share</button>
+                              <button type="button" onClick={() => handleLoadHistoricalBill(b)} className="px-1.5 py-0.5 bg-stone-900 text-white rounded text-[9px] font-bold uppercase">Load</button>
+                              <button type="button" onClick={() => setBillToDelete(b)} className="px-1.5 py-0.5 bg-rose-100 text-rose-700 border rounded text-[9px]"><i className="fa-solid fa-trash-can"></i></button>
                             </div>
                           </div>
 
-                          {/* RESTORED COLLAPSIBLE LOG PREVIEW */}
                           {visibleLogPreviews[bId] && (
-                            <div className="mt-2 p-2.5 bg-stone-50 border rounded text-left font-mono text-[10px] leading-tight animate-slide-up">
-                              <div className="text-center border-b border-dashed border-stone-400 pb-1 mb-1 font-bold">RECEIPT PREVIEW</div>
+                            <div className="mt-2 p-2 bg-stone-50 border rounded font-mono text-[10px] leading-tight animate-slide-up">
+                              <div className="text-center border-b pb-1 mb-1 font-bold">RECEIPT PREVIEW</div>
                               <table className="w-full text-left text-[9px]">
                                 <thead>
-                                  <tr className="border-b border-stone-400 text-stone-500">
-                                    <th className="w-5 text-center">QT</th>
-                                    <th>ITEM</th>
-                                    <th className="text-right w-8">P</th>
-                                    <th className="text-right w-10">AMT</th>
-                                  </tr>
+                                  <tr className="border-b text-stone-500"><th className="w-5">QT</th><th>ITEM</th><th className="text-right">P</th><th className="text-right">AMT</th></tr>
                                 </thead>
                                 <tbody>
                                   {parseItemsSafely(getTxnItems(b)).map((item, index) => (
-                                    <React.Fragment key={index}>
-                                      <tr className="border-b border-stone-200/50">
-                                        <td className="text-center font-bold">{Math.round(item.qty || 1)}</td>
-                                        <td className="uppercase font-bold">{item.name || "Item"}</td>
-                                        <td className="text-right">{Math.round(item.finalUnitPrice || item.rate || item.basePrice || 0)}</td>
-                                        <td className="text-right font-bold">{Math.round(getItemTotalAmount(item))}</td>
-                                      </tr>
-                                      {(index + 1) % 5 === 0 && index !== parseItemsSafely(getTxnItems(b)).length - 1 && (
-                                        <tr>
-                                          <td colSpan="4" className="py-0.5 border-b border-dotted border-stone-400"></td>
-                                        </tr>
-                                      )}
-                                    </React.Fragment>
+                                    <tr key={index} className="border-b border-stone-200/50">
+                                      <td className="text-center font-bold">{Math.round(item.qty || 1)}</td>
+                                      <td className="uppercase font-bold">{item.name || "Item"}</td>
+                                      <td className="text-right">{Math.round(item.finalUnitPrice || item.rate || 0)}</td>
+                                      <td className="text-right font-bold">{Math.round(getItemTotalAmount(item))}</td>
+                                    </tr>
                                   ))}
                                 </tbody>
                               </table>
-                              <div className="text-right font-black border-t border-dashed border-stone-400 pt-1 mt-1 text-stone-950">
-                                TOTAL: ₹{Math.round(bAmt)}
-                              </div>
                             </div>
                           )}
 
@@ -2569,204 +2025,77 @@
               </div>
             )}
 
-            {/* PRINT & APP SETTINGS TAB */}
+            {/* SETTINGS TAB WITH PRINT S.NO TOGGLE */}
             {currentTab === "settings" && (
               <div className="flex-grow p-2 bg-stone-50 overflow-y-auto custom-scroll space-y-3">
                 <div className="bg-white p-3 border rounded-xl shadow-xs space-y-3">
-                  <h3 className="text-xs font-black uppercase text-stone-800 border-b pb-1.5 flex items-center gap-1.5">
-                    <i className="fa-solid fa-sliders text-amber-500"></i> Printer & Receipt Settings
+                  <h3 className="text-xs font-black uppercase text-stone-800 border-b pb-1.5">
+                    <i className="fa-solid fa-sliders text-amber-500"></i> Receipt & App Settings
                   </h3>
 
-                  {/* Primary Yearly Sheet URL Switcher */}
+                  {/* Print Serial Number Toggle */}
                   <div className="space-y-1">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Primary Sheet Script URL (Switch Yearly)</span>
-                    <input 
-                      type="url" 
-                      placeholder="https://script.google.com/macros/s/.../exec"
-                      value={printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL}
-                      onChange={(e) => setPrintSettings({ ...printSettings, primarySheetUrl: e.target.value })}
-                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
-                    />
-                    <div className="flex justify-between text-[8px] text-stone-400">
-                      <span>Paste new Apps Script URL here when creating new yearly sheets.</span>
-                      <button type="button" onClick={() => setPrintSettings({ ...printSettings, primarySheetUrl: DEFAULT_SCRIPT_URL })} className="text-amber-700 underline font-bold">Reset Default</button>
-                    </div>
-                  </div>
-
-                  {/* Last Balance Fetching Sheet URL */}
-                  <div className="space-y-1 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Last Balance Fetch Sheet URL</span>
-                    <input 
-                      type="url" 
-                      placeholder="https://script.google.com/macros/s/.../exec"
-                      value={printSettings.lastBalanceSheetUrl || DEFAULT_LAST_BAL_SCRIPT_URL}
-                      onChange={(e) => setPrintSettings({ ...printSettings, lastBalanceSheetUrl: e.target.value })}
-                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
-                    />
-                    <div className="flex justify-between text-[8px] text-stone-400">
-                      <span>URL used specifically to query previous customer balances.</span>
-                      <button type="button" onClick={() => setPrintSettings({ ...printSettings, lastBalanceSheetUrl: DEFAULT_LAST_BAL_SCRIPT_URL })} className="text-amber-700 underline font-bold">Reset Default</button>
-                    </div>
-                  </div>
-
-                  {/* Custom Thank You Message */}
-                  <div className="space-y-1 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Custom Receipt Thank You Message</span>
-                    <textarea 
-                      rows="2"
-                      placeholder="Thank You For Your Visit..."
-                      value={printSettings.footerMessage}
-                      onChange={(e) => setPrintSettings({ ...printSettings, footerMessage: e.target.value })}
-                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
-                    ></textarea>
-                    <span className="block text-[8px] text-stone-400 italic">Appears at the bottom of printed receipts, images, and previews.</span>
-                  </div>
-
-                  {/* Autocomplete Toggle */}
-                  <div className="space-y-1 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Draft Typing Controls</span>
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Optional Serial Numbers</span>
                     <label className="flex items-center justify-between p-2 border rounded bg-stone-50 cursor-pointer text-xs font-bold">
-                      <span>Inline Ghost Autocomplete Suffix</span>
+                      <span>Print Item Serial Numbers (# / S.No.) on Bills</span>
                       <input 
                         type="checkbox" 
-                        checked={printSettings.enableInlineAutocomplete} 
-                        onChange={(e) => setPrintSettings({ ...printSettings, enableInlineAutocomplete: e.target.checked })} 
+                        checked={printSettings.showSNo} 
+                        onChange={(e) => setPrintSettings({ ...printSettings, showSNo: e.target.checked })} 
                         className="h-4 w-4 rounded text-stone-900" 
                       />
                     </label>
                   </div>
 
-                  {/* Field Visibility Options */}
-                  <div className="space-y-2 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Header Field Visibility</span>
-                    <div className="grid grid-cols-2 gap-2 text-xs font-bold">
-                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
-                        <input type="checkbox" checked={printSettings.showName} onChange={e => setPrintSettings({ ...printSettings, showName: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
-                        <span>Print Customer Name</span>
-                      </label>
-                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
-                        <input type="checkbox" checked={printSettings.showCity} onChange={e => setPrintSettings({ ...printSettings, showCity: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
-                        <span>Print Customer City (4-Letter Code)</span>
-                      </label>
-                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
-                        <input type="checkbox" checked={printSettings.showDate} onChange={e => setPrintSettings({ ...printSettings, showDate: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
-                        <span>Print Invoice Date</span>
-                      </label>
-                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
-                        <input type="checkbox" checked={printSettings.showTime} onChange={e => setPrintSettings({ ...printSettings, showTime: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
-                        <span>Print Invoice Time</span>
-                      </label>
-                    </div>
+                  <div className="space-y-1 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Primary Sheet Script URL</span>
+                    <input 
+                      type="url" 
+                      value={printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL}
+                      onChange={(e) => setPrintSettings({ ...printSettings, primarySheetUrl: e.target.value })}
+                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
+                    />
                   </div>
 
-                  {/* Font Options */}
-                  <div className="space-y-2 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Typography Settings</span>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Font Family</span>
-                        <select 
-                          value={printSettings.fontFamily} 
-                          onChange={e => setPrintSettings({ ...printSettings, fontFamily: e.target.value })} 
-                          className="w-full p-2 border rounded font-bold bg-stone-50"
-                        >
-                          <option value="Courier Prime">Courier Prime (Monospace)</option>
-                          <option value="Roboto Mono">Roboto Mono</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Base Font Size (px)</span>
-                        <input 
-                          type="number" 
-                          value={printSettings.fontSize} 
-                          onChange={e => setPrintSettings({ ...printSettings, fontSize: e.target.value })} 
-                          className="w-full p-2 border rounded font-bold bg-stone-50" 
-                        />
-                      </div>
-                    </div>
+                  <div className="space-y-1 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Custom Receipt Thank You Message</span>
+                    <textarea 
+                      rows="2"
+                      value={printSettings.footerMessage}
+                      onChange={(e) => setPrintSettings({ ...printSettings, footerMessage: e.target.value })}
+                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
+                    ></textarea>
                   </div>
 
-                  {/* Spacing Controls */}
-                  <div className="space-y-2 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Table Row & Column Spacing</span>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Row Vertical Padding (px)</span>
-                        <input 
-                          type="number" 
-                          value={printSettings.rowSpacing} 
-                          onChange={e => setPrintSettings({ ...printSettings, rowSpacing: e.target.value })} 
-                          className="w-full p-2 border rounded font-bold bg-stone-50" 
-                        />
-                      </div>
-
-                      <div>
-                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Column Horizontal Padding (px)</span>
-                        <input 
-                          type="number" 
-                          value={printSettings.colSpacing} 
-                          onChange={e => setPrintSettings({ ...printSettings, colSpacing: e.target.value })} 
-                          className="w-full p-2 border rounded font-bold bg-stone-50" 
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <button 
-                    type="button" 
-                    onClick={() => triggerNotification("✓ Print settings saved!")} 
-                    className="w-full py-2.5 bg-stone-900 text-white font-bold rounded-lg text-xs uppercase tracking-wider shadow-xs"
-                  >
-                    Save Settings
-                  </button>
+                  <button type="button" onClick={() => triggerNotification("✓ Settings saved!")} className="w-full py-2.5 bg-stone-900 text-white font-bold rounded-lg text-xs uppercase shadow-xs">Save Settings</button>
                 </div>
               </div>
             )}
 
           </main>
 
-          {/* Bottom Navigation Bar */}
           <footer className="bg-stone-900 border-t py-2.5 px-4 no-print flex-shrink-0 z-40 shadow-lg">
             <div className="max-w-md mx-auto flex justify-around items-center">
-              
-              <button 
-                type="button" 
-                onClick={() => setCurrentTab("bill")} 
-                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all relative ${currentTab === "bill" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
-              >
+              <button type="button" onClick={() => setCurrentTab("bill")} className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl relative ${currentTab === "bill" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}>
                 <i className="fa-solid fa-receipt text-lg"></i>
                 <span className="text-[10px] font-black uppercase tracking-wider">Fast Draft</span>
                 {baggedItems.length > 0 && <span className="absolute -top-1 right-2 bg-rose-600 text-white text-[8px] font-black h-4 w-4 rounded-full flex items-center justify-center animate-bounce">{baggedItems.length}</span>}
               </button>
 
-              <button 
-                type="button" 
-                onClick={() => setCurrentTab("products")} 
-                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${currentTab === "products" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
-              >
+              <button type="button" onClick={() => setCurrentTab("products")} className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl ${currentTab === "products" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}>
                 <i className="fa-solid fa-box-open text-lg"></i>
                 <span className="text-[10px] font-black uppercase tracking-wider">Products</span>
               </button>
 
-              <button 
-                type="button" 
-                onClick={() => setCurrentTab("logs")} 
-                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${currentTab === "logs" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
-              >
+              <button type="button" onClick={() => setCurrentTab("logs")} className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl ${currentTab === "logs" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}>
                 <i className="fa-solid fa-clock-rotate-left text-lg"></i>
                 <span className="text-[10px] font-black uppercase tracking-wider">Historic</span>
               </button>
 
-              <button 
-                type="button" 
-                onClick={() => setCurrentTab("settings")} 
-                className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl transition-all ${currentTab === "settings" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}
-              >
+              <button type="button" onClick={() => setCurrentTab("settings")} className={`flex flex-col items-center gap-1 py-1 px-3 rounded-xl ${currentTab === "settings" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}>
                 <i className="fa-solid fa-gear text-lg"></i>
                 <span className="text-[10px] font-black uppercase tracking-wider">Settings</span>
               </button>
-
             </div>
           </footer>
 
