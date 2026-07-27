@@ -5,11 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Rough Bill Generator Sheets Pro</title>
   
-  <!-- PWA Manifest & Meta Tags -->
-  <link rel="manifest" href='data:application/manifest+json,{"name":"Rough Bill Generator","short_name":"RoughBill","start_url":".","display":"standalone","background_color":"#f5f5f4","theme_color":"#1c1917","icons":[{"src":"https://cdn-icons-png.flaticon.com/512/1052/1052866.png","sizes":"512x512","type":"image/png"}]}'>
+  <!-- PWA Web App Manifest for PWABuilder & Chrome -->
+  <link rel="manifest" id="manifest-placeholder">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="RoughBill">
   <meta name="theme-color" content="#1c1917">
+  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/1052/1052866.png">
 
   <!-- CDNs -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
@@ -73,22 +76,59 @@
     }
     .animate-slide-up { animation: slideInUp 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
   </style>
+
+  <script>
+    // Create inline web manifest for PWABuilder & Chrome
+    const manifestObj = {
+      "name": "Rough Bill Generator Sheets Pro",
+      "short_name": "RoughBill",
+      "description": "Rough Bill Generator and Ledger Management",
+      "start_url": "./",
+      "display": "standalone",
+      "background_color": "#f5f5f4",
+      "theme_color": "#1c1917",
+      "orientation": "portrait",
+      "icons": [
+        {
+          "src": "https://cdn-icons-png.flaticon.com/512/1052/1052866.png",
+          "sizes": "192x192",
+          "type": "image/png",
+          "purpose": "any maskable"
+        },
+        {
+          "src": "https://cdn-icons-png.flaticon.com/512/1052/1052866.png",
+          "sizes": "512x512",
+          "type": "image/png",
+          "purpose": "any maskable"
+        }
+      ]
+    };
+    const manifestBlob = new Blob([JSON.stringify(manifestObj)], {type: 'application/json'});
+    const manifestUrl = URL.createObjectURL(manifestBlob);
+    document.addEventListener("DOMContentLoaded", () => {
+      const link = document.getElementById("manifest-placeholder");
+      if (link) link.setAttribute("href", manifestUrl);
+    });
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        const swCode = `
+          const CACHE_NAME = 'rough-bill-v3';
+          self.addEventListener('install', e => self.skipWaiting());
+          self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+          self.addEventListener('fetch', e => {
+            e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+          });
+        `;
+        const blob = new Blob([swCode], { type: 'text/javascript' });
+        navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(() => {});
+      });
+    }
+  </script>
 </head>
 <body class="text-stone-900 font-sans antialiased selection:bg-stone-300 bg-stone-100">
   <div id="root" class="h-[100dvh] w-full flex flex-col overflow-hidden"></div>
   <div id="image-export-container"></div>
-
-  <script>
-    if ('serviceWorker' in navigator) {
-      const swCode = `
-        self.addEventListener('install', e => self.skipWaiting());
-        self.addEventListener('activate', e => self.clients.claim());
-        self.addEventListener('fetch', e => e.respondWith(fetch(e.request).catch(() => caches.match(e.request))));
-      `;
-      const blob = new Blob([swCode], { type: 'text/javascript' });
-      navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(() => {});
-    }
-  </script>
 
   <script type="text/babel">
     const { useState, useEffect, useRef, useMemo } = React;
@@ -96,7 +136,7 @@
     const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
     const DEFAULT_LAST_BAL_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
 
-    // Case-Insensitive Helpers
+    // Case-Insensitive Property Extractors
     const getTxnName = (t) => t ? String(t.name || t.Name || t.customerName || t.CustomerName || t.Customer || t.customer || "") : "";
     const getTxnAmount = (t) => {
       if (!t) return 0;
@@ -119,7 +159,7 @@
       return firstDigit + rest;
     };
 
-    // Append JI to customer name if missing
+    // Format customer name with "JI" for printouts only
     const formatCustomerNameJI = (name) => {
       if (!name || !name.trim()) return "WALK-IN CUSTOMER JI";
       const trimmed = name.trim().toUpperCase();
@@ -319,7 +359,6 @@
           totalAmount: getItemTotalAmount(item)
         }));
 
-        // SAVE ONLY CURRENT BILL AMOUNT
         const saveAmount = Math.round(bill.currentBillAmount || bill.totalAmount || 0);
 
         const payload = {
@@ -440,7 +479,7 @@
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
       const [lastBilledInfo, setLastBilledInfo] = useState(null);
 
-      // Print Settings
+      // Print Settings with full original options + Serial No toggle
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
@@ -458,7 +497,7 @@
         try { localStorage.setItem("roughBillPrintSettings", JSON.stringify(printSettings)); } catch (e) {}
       }, [printSettings]);
 
-      // LOAD LOCAL DRAFT ON STARTUP
+      // Load Local Draft on Startup
       useEffect(() => {
         try {
           const savedDraft = localStorage.getItem("billDraftData");
@@ -474,7 +513,7 @@
         } catch (e) {}
       }, []);
 
-      // SAVE LOCAL DRAFT ON UPDATE
+      // Save Local Draft on Update
       useEffect(() => {
         try {
           const draftObj = { customerName, customerCity, discountX, baggedItems, includeLastBalance, lastBalanceAmount };
@@ -482,7 +521,7 @@
         } catch (e) {}
       }, [customerName, customerCity, discountX, baggedItems, includeLastBalance, lastBalanceAmount]);
 
-      // Report Preset
+      // Report Presets
       const [reportPreset, setReportPreset] = useState("2days");
       const [reportStartDate, setReportStartDate] = useState(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
       const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -962,7 +1001,6 @@
           basePrice: unitPrice, less: "0", finalUnitPrice: unitPrice, totalAmount: parsedQty * unitPrice
         };
 
-        // PREPEND ITEM TO TOP
         setBaggedItems(prev => [newItem, ...prev]);
         setParserInput(""); 
 
@@ -1027,7 +1065,7 @@
       const currentBillTotalSum = useMemo(() => baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0), [baggedItems]);
       const grandFinalBalance = useMemo(() => Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0)), [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // RENDER RECEIPT WITH S.NO, JI SUFFIX, DD/MM DATE
+      // RENDER RECEIPT WITH "JI" SUFFIX & OPTIONAL S.NO
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const safeItems = Array.isArray(itemsList) ? itemsList : [];
         const sortedItems = [...safeItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
@@ -1124,38 +1162,54 @@
         return receiptHTML;
       };
 
+      // PRINT FIRST, SAVE AFTERWARDS & BYPASS SYSTEM PRINT DIALOG ON BLE
       const handleGenerateAndPrintBill = async () => {
         if (baggedItems.length === 0) return;
         
         const synchronousIsEdit = !!editingBillId;
         const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
         const printDateFormatted = formatInvoiceDateTime(billDate);
-        const finalClientName = formatCustomerNameJI(customerName);
+        const rawCustomerName = customerName.trim() || "Walk-In Customer";
+        const printCustomerName = formatCustomerNameJI(customerName);
 
+        // 1. FIRST: PRINT IMMEDIATELY
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
-          printBody.innerHTML = renderReceiptForSpool(baggedItems, finalClientName, customerCity, printDateFormatted);
+          printBody.innerHTML = renderReceiptForSpool(baggedItems, rawCustomerName, customerCity, printDateFormatted);
         }
         
-        window.print();
-
         if (bleCharacteristic) {
-          try { printBLEThermalDirectly(baggedItems, finalClientName, customerCity, printDateFormatted); } catch (e) {}
+          // Send raw ESC/POS commands directly to Bluetooth printer
+          // Do NOT call window.print() so Android doesn't open the native System Print Preview screen!
+          try {
+            await printBLEThermalDirectly(baggedItems, rawCustomerName, customerCity, printDateFormatted);
+          } catch (e) {
+            console.warn("BLE print dispatch error:", e);
+            window.print();
+          }
+        } else {
+          // Fallback to standard print dialog if BLE printer is not connected
+          window.print();
         }
 
-        // SAVE ONLY CURRENT BILL AMOUNT
+        // 2. THEN: SAVE BILL TO SHEETS / INDEXEDDB (SAVE BILL AMOUNT ONLY)
         const billDataObject = {
-          id: uniqueNumericId, customerName: finalClientName, customerCity: customerCity || "Local",
-          date: billDate, items: baggedItems, 
+          id: uniqueNumericId,
+          customerName: rawCustomerName, // Keeps clean DB name
+          customerCity: customerCity || "Local",
+          date: billDate,
+          items: baggedItems,
           currentBillAmount: currentBillTotalSum,
-          totalAmount: currentBillTotalSum, 
+          totalAmount: currentBillTotalSum,
           discountRate: parseFloat(discountX) || 0,
-          timestamp: uniqueNumericId, formattedDateTime: printDateFormatted, localUpdatedAt: Date.now()
+          timestamp: uniqueNumericId,
+          formattedDateTime: printDateFormatted,
+          localUpdatedAt: Date.now()
         };
 
         setCloudBills(prev => [billDataObject, ...prev.filter(b => String(getTxnId(b)) !== String(uniqueNumericId))]);
 
-        if (customerName.trim()) {
+        if (rawCustomerName) {
           const updatedBal = lastBalanceAmount + currentBillTotalSum;
           const currentBilledInfo = {
             date: formatDDMM(billDate),
@@ -1163,20 +1217,20 @@
             code: encodeCustomCipher(currentBillTotalSum),
             display: `${formatDDMM(billDate)} ${encodeCustomCipher(currentBillTotalSum)}`
           };
-          saveLocalBalanceCache(customerName, updatedBal, currentBilledInfo);
+          saveLocalBalanceCache(rawCustomerName, updatedBal, currentBilledInfo);
         }
 
         window.firebaseBridge.saveBillToCloudWithNumericId(uniqueNumericId, billDataObject, synchronousIsEdit, activeScriptUrl)
-          .then(() => triggerNotification("✓ Bill saved to Sheets!"))
+          .then(() => triggerNotification("✓ Printed & saved to Sheets!"))
           .catch(() => {
             setPendingSyncCount(prev => prev + 1);
-            triggerNotification("⚡ Saved locally! Will auto-sync when online.");
+            triggerNotification("⚡ Printed & saved locally! Will auto-sync when online.");
           });
 
         setTimeout(() => handleResetAll(), 300);
       };
 
-      // PRINT WORKER GATHERING SLIP
+      // Worker Gathering Slip
       const handlePrintWorkerSlip = () => {
         const textToPrint = workerNoteInput.trim() || baggedItems.map(i => `${Math.round(i.qty)} ${i.name}`).join("\n");
         if (!textToPrint) {
@@ -1203,15 +1257,15 @@
         }
       };
 
-      // SHARE BILL RECEIPT IMAGE
+      // Share Receipt Image
       const shareBillImage = (items, custName, cityVal, activeDate) => {
         const exportContainer = document.getElementById("image-export-container");
         if (!exportContainer) return;
 
         const printDateFormatted = formatInvoiceDateTime(activeDate);
-        const finalClientName = formatCustomerNameJI(custName);
+        const printCustomerName = formatCustomerNameJI(custName);
 
-        exportContainer.innerHTML = renderReceiptForSpool(items, finalClientName, cityVal, printDateFormatted);
+        exportContainer.innerHTML = renderReceiptForSpool(items, printCustomerName, cityVal, printDateFormatted);
         triggerNotification("Generating shareable receipt image...");
 
         setTimeout(() => {
@@ -1228,7 +1282,7 @@
 
                 if (navigator.canShare && navigator.canShare({ files: [file] })) {
                   try {
-                    await navigator.share({ files: [file], title: `Bill - ${finalClientName}`, text: `Receipt for ${finalClientName}` });
+                    await navigator.share({ files: [file], title: `Bill - ${printCustomerName}`, text: `Receipt for ${printCustomerName}` });
                     triggerNotification("✓ Shared successfully!");
                     exportContainer.innerHTML = "";
                     return;
@@ -1309,7 +1363,6 @@
         } catch (err) {}
       };
 
-      // SELECT SUGGESTION & KEEP KEYBOARD OPEN
       const selectParserSuggestion = (prodName, e) => {
         if (e) {
           e.preventDefault();
@@ -1322,7 +1375,7 @@
         if (parserRef.current) parserRef.current.focus();
       };
 
-      // HISTORIC BILLS FILTERED TO LAST 7 DAYS & AUTO-LOCK FOR 2 MINS
+      // Historic Bills Filtered to Last 7 Days Only & Auto-Lock
       const last7DaysBills = useMemo(() => {
         const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
         return cloudBills.filter(b => {
@@ -1389,7 +1442,8 @@
         itemsList.forEach((item, index) => {
           const itemAmt = getItemTotalAmount(item);
           sumTotal += itemAmt;
-          const nStr = String(item.name || "").trim().toUpperCase().slice(0, 15).padEnd(15);
+          const sNoPrefix = printSettings?.showSNo ? `${index + 1}. ` : "";
+          const nStr = (sNoPrefix + String(item.name || "")).trim().toUpperCase().slice(0, 15).padEnd(15);
           const qStr = String(Math.round(item.qty || 1)).padEnd(3);
           const pStr = String(Math.round(item.finalUnitPrice || 0)).padStart(4);
           const totalStr = String(Math.round(itemAmt)).padStart(6);
@@ -1466,7 +1520,7 @@
             <tbody>
         `;
 
-        filteredReportBills.forEach((b, idx) => {
+        filteredReportBills.forEach((b) => {
           const bName = formatCustomerNameJI(getTxnName(b));
           const bCity = b.customerCity || b.city;
           const bAmt = getTxnAmount(b);
@@ -1590,14 +1644,13 @@
             </div>
           )}
 
-          {/* Top Bar with FIXED 15% Customer Name Field */}
+          {/* Top Bar with FIXED 15% Horizontal Name Field */}
           <div className="bg-white p-2 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-sm flex-shrink-0">
             <div className="flex gap-1.5 items-center font-sans h-11">
               <button type="button" onClick={() => setShowNewBillConfirmModal(true)} title="New Bill Reset" className="h-10 w-10 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-black shadow-xs active:scale-95 flex-shrink-0"><i className="fa-solid fa-plus-circle text-lg"></i></button>
               <button type="button" onClick={syncDataFromGoogleSheets} title="Sync Customer Database" className="h-10 w-10 flex items-center justify-center bg-stone-100 border text-stone-700 rounded-lg shadow-xs flex-shrink-0"><i className="fa-solid fa-sync"></i></button>
               
-              {/* Customer Name field set to FIXED ~15-20% horizontal ratio */}
-              <div className="w-[20%] min-w-[75px] relative flex-shrink-0" ref={custRef}>
+              <div className="w-[15%] min-w-[70px] relative flex-shrink-0" ref={custRef}>
                 <input 
                   type="text" 
                   autoComplete="off"
@@ -1676,7 +1729,7 @@
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-2 overflow-hidden min-h-0">
                 
-                {/* Directory Shortcuts (Keyboard stays open on touch) */}
+                {/* Directory Shortcuts */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-[8px] font-black text-stone-400 uppercase tracking-wider">Directory Shortcuts</span>
@@ -1737,7 +1790,7 @@
                   </form>
                 </div>
 
-                {/* BAGGED ITEMS LIST: PREPENDED AT TOP & COMPACT */}
+                {/* BAGGED ITEMS LIST */}
                 <div ref={baggedListRef} className="flex-grow overflow-y-auto custom-scroll space-y-2.5 pr-0.5 min-h-0 flex-1">
                   
                   {baggedItems.length === 0 ? (
@@ -1915,7 +1968,7 @@
               </div>
             )}
 
-            {/* HISTORIC TAB (LAST 7 DAYS ONLY & EMPTY 2-MIN UNLOCK FIELD) */}
+            {/* HISTORIC TAB */}
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 
@@ -1953,13 +2006,11 @@
                   </div>
                 </div>
 
-                {/* HISTORIC BILLS LIST (LAST 7 DAYS ONLY, EMPTY UNLOCK INPUT) */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0 flex-1">
                   <div className="flex justify-between items-center border-b pb-1">
                     <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">
                       Historic Bills (Last 7 Days - {isVerified ? 'All' : 'Showing 3'})
                     </span>
-                    {/* EMPTY UNLOCK INPUT FIELD (NO PASSCODE WORD) */}
                     <input 
                       type="password" 
                       placeholder="..." 
@@ -2025,49 +2076,155 @@
               </div>
             )}
 
-            {/* SETTINGS TAB WITH PRINT S.NO TOGGLE */}
+            {/* FULL RESTORED SETTINGS TAB */}
             {currentTab === "settings" && (
               <div className="flex-grow p-2 bg-stone-50 overflow-y-auto custom-scroll space-y-3">
                 <div className="bg-white p-3 border rounded-xl shadow-xs space-y-3">
-                  <h3 className="text-xs font-black uppercase text-stone-800 border-b pb-1.5">
-                    <i className="fa-solid fa-sliders text-amber-500"></i> Receipt & App Settings
+                  <h3 className="text-xs font-black uppercase text-stone-800 border-b pb-1.5 flex items-center gap-1.5">
+                    <i className="fa-solid fa-sliders text-amber-500"></i> Printer & Receipt Settings
                   </h3>
 
-                  {/* Print Serial Number Toggle */}
+                  {/* Primary Yearly Sheet URL Switcher */}
                   <div className="space-y-1">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Optional Serial Numbers</span>
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Primary Sheet Script URL (Switch Yearly)</span>
+                    <input 
+                      type="url" 
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      value={printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL}
+                      onChange={(e) => setPrintSettings({ ...printSettings, primarySheetUrl: e.target.value })}
+                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
+                    />
+                    <div className="flex justify-between text-[8px] text-stone-400">
+                      <span>Paste new Apps Script URL here when creating new yearly sheets.</span>
+                      <button type="button" onClick={() => setPrintSettings({ ...printSettings, primarySheetUrl: DEFAULT_SCRIPT_URL })} className="text-amber-700 underline font-bold">Reset Default</button>
+                    </div>
+                  </div>
+
+                  {/* Last Balance Fetching Sheet URL */}
+                  <div className="space-y-1 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Last Balance Fetch Sheet URL</span>
+                    <input 
+                      type="url" 
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      value={printSettings.lastBalanceSheetUrl || DEFAULT_LAST_BAL_SCRIPT_URL}
+                      onChange={(e) => setPrintSettings({ ...printSettings, lastBalanceSheetUrl: e.target.value })}
+                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
+                    />
+                    <div className="flex justify-between text-[8px] text-stone-400">
+                      <span>URL used specifically to query previous customer balances.</span>
+                      <button type="button" onClick={() => setPrintSettings({ ...printSettings, lastBalanceSheetUrl: DEFAULT_LAST_BAL_SCRIPT_URL })} className="text-amber-700 underline font-bold">Reset Default</button>
+                    </div>
+                  </div>
+
+                  {/* Custom Thank You Message */}
+                  <div className="space-y-1 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Custom Receipt Thank You Message</span>
+                    <textarea 
+                      rows="2"
+                      placeholder="Thank You For Your Visit..."
+                      value={printSettings.footerMessage}
+                      onChange={(e) => setPrintSettings({ ...printSettings, footerMessage: e.target.value })}
+                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
+                    ></textarea>
+                    <span className="block text-[8px] text-stone-400 italic">Appears at the bottom of printed receipts, images, and previews.</span>
+                  </div>
+
+                  {/* Autocomplete Toggle */}
+                  <div className="space-y-1 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Draft Typing Controls</span>
                     <label className="flex items-center justify-between p-2 border rounded bg-stone-50 cursor-pointer text-xs font-bold">
-                      <span>Print Item Serial Numbers (# / S.No.) on Bills</span>
+                      <span>Inline Ghost Autocomplete Suffix</span>
                       <input 
                         type="checkbox" 
-                        checked={printSettings.showSNo} 
-                        onChange={(e) => setPrintSettings({ ...printSettings, showSNo: e.target.checked })} 
+                        checked={printSettings.enableInlineAutocomplete} 
+                        onChange={(e) => setPrintSettings({ ...printSettings, enableInlineAutocomplete: e.target.checked })} 
                         className="h-4 w-4 rounded text-stone-900" 
                       />
                     </label>
                   </div>
 
-                  <div className="space-y-1 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Primary Sheet Script URL</span>
-                    <input 
-                      type="url" 
-                      value={printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL}
-                      onChange={(e) => setPrintSettings({ ...printSettings, primarySheetUrl: e.target.value })}
-                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
-                    />
+                  {/* Field Visibility Options + Serial No Toggle */}
+                  <div className="space-y-2 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Header & Table Field Visibility</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showName} onChange={e => setPrintSettings({ ...printSettings, showName: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Customer Name</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showCity} onChange={e => setPrintSettings({ ...printSettings, showCity: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Customer City (Code)</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showDate} onChange={e => setPrintSettings({ ...printSettings, showDate: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Invoice Date</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer">
+                        <input type="checkbox" checked={printSettings.showTime} onChange={e => setPrintSettings({ ...printSettings, showTime: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Invoice Time</span>
+                      </label>
+                      <label className="flex items-center gap-2 p-2 border rounded bg-stone-50 cursor-pointer col-span-2">
+                        <input type="checkbox" checked={printSettings.showSNo} onChange={e => setPrintSettings({ ...printSettings, showSNo: e.target.checked })} className="h-4 w-4 rounded text-stone-900" />
+                        <span>Print Item Serial Numbers (# / S.No.)</span>
+                      </label>
+                    </div>
                   </div>
 
-                  <div className="space-y-1 border-t pt-2">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Custom Receipt Thank You Message</span>
-                    <textarea 
-                      rows="2"
-                      value={printSettings.footerMessage}
-                      onChange={(e) => setPrintSettings({ ...printSettings, footerMessage: e.target.value })}
-                      className="w-full text-xs p-2 border rounded font-mono font-bold bg-stone-50 focus:outline-none"
-                    ></textarea>
+                  {/* Font Options */}
+                  <div className="space-y-2 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Typography Settings</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Font Family</span>
+                        <select 
+                          value={printSettings.fontFamily} 
+                          onChange={e => setPrintSettings({ ...printSettings, fontFamily: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50"
+                        >
+                          <option value="Courier Prime">Courier Prime (Monospace)</option>
+                          <option value="Roboto Mono">Roboto Mono</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Base Font Size (px)</span>
+                        <input 
+                          type="number" 
+                          value={printSettings.fontSize} 
+                          onChange={e => setPrintSettings({ ...printSettings, fontSize: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50" 
+                        />
+                      </div>
+                    </div>
                   </div>
 
-                  <button type="button" onClick={() => triggerNotification("✓ Settings saved!")} className="w-full py-2.5 bg-stone-900 text-white font-bold rounded-lg text-xs uppercase shadow-xs">Save Settings</button>
+                  {/* Spacing Controls */}
+                  <div className="space-y-2 border-t pt-2">
+                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Table Row & Column Spacing</span>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Row Vertical Padding (px)</span>
+                        <input 
+                          type="number" 
+                          value={printSettings.rowSpacing} 
+                          onChange={e => setPrintSettings({ ...printSettings, rowSpacing: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50" 
+                        />
+                      </div>
+
+                      <div>
+                        <span className="block text-[9px] font-bold text-stone-600 mb-0.5">Column Horizontal Padding (px)</span>
+                        <input 
+                          type="number" 
+                          value={printSettings.colSpacing} 
+                          onChange={e => setPrintSettings({ ...printSettings, colSpacing: e.target.value })} 
+                          className="w-full p-2 border rounded font-bold bg-stone-50" 
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <button type="button" onClick={() => triggerNotification("✓ Print settings saved!")} className="w-full py-2.5 bg-stone-900 text-white font-bold rounded-lg text-xs uppercase tracking-wider shadow-xs">Save Settings</button>
                 </div>
               </div>
             )}
