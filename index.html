@@ -112,7 +112,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         const swCode = `
-          const CACHE_NAME = 'rough-bill-v6';
+          const CACHE_NAME = 'rough-bill-v7';
           self.addEventListener('install', e => self.skipWaiting());
           self.addEventListener('activate', e => e.waitUntil(clients.claim()));
           self.addEventListener('fetch', e => {
@@ -450,7 +450,7 @@
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
 
-      // Voice Input Speech Recognition States
+      // Voice Input Speech Recognition
       const [isListening, setIsListening] = useState(false);
       const [voiceLang, setVoiceLang] = useState("pa-IN");
       const [showVoiceTips, setShowVoiceTips] = useState(false);
@@ -479,13 +479,18 @@
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
       const [lastBilledInfo, setLastBilledInfo] = useState(null);
 
+      // Print settings with showSNo defaulting to true
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
-          if (saved) return JSON.parse(saved);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed.showSNo === undefined) parsed.showSNo = true;
+            return parsed;
+          }
         } catch (e) {}
         return {
-          showName: true, showCity: true, showDate: true, showTime: true, showSNo: false,
+          showName: true, showCity: true, showDate: true, showTime: true, showSNo: true,
           fontSize: '24', fontFamily: 'Courier Prime', rowSpacing: '8', colSpacing: '4',
           primarySheetUrl: DEFAULT_SCRIPT_URL, lastBalanceSheetUrl: DEFAULT_LAST_BAL_SCRIPT_URL,
           enableInlineAutocomplete: true, footerMessage: "Thank You For Your Visit\nPlease Visit Again"
@@ -534,7 +539,29 @@
         setTimeout(() => setNotification(""), 3500);
       };
 
-      // Lookup customer phone number from dbCustomers
+      // Outside click listener for Customer Suggestions Dropdown
+      useEffect(() => {
+        const handleClickOutside = (e) => {
+          if (custRef.current && !custRef.current.contains(e.target)) {
+            setShowCustSuggestions(false);
+          }
+        };
+        document.addEventListener("mousedown", handleClickOutside);
+        document.addEventListener("touchstart", handleClickOutside);
+        return () => {
+          document.removeEventListener("mousedown", handleClickOutside);
+          document.removeEventListener("touchstart", handleClickOutside);
+        };
+      }, []);
+
+      // Filtered Customers - Shows top matches even when input is blank
+      const filteredSheetsCustomers = useMemo(() => {
+        if (!dbCustomers || !Array.isArray(dbCustomers)) return [];
+        const query = customerName.trim().toLowerCase();
+        if (!query) return dbCustomers.slice(0, 15);
+        return dbCustomers.filter(c => c && c.name && String(c.name).toLowerCase().includes(query)).slice(0, 20);
+      }, [dbCustomers, customerName]);
+
       const getCustomerPhone = (custName) => {
         if (!custName) return "";
         const norm = getNormalizedKey(custName);
@@ -547,7 +574,6 @@
         return "";
       };
 
-      // Format clean WhatsApp bill text summary
       const generateWhatsAppText = (itemsList, custName, activeDate, totalAmt) => {
         const printName = formatCustomerNameJI(custName);
         const dateStr = formatDDMM(activeDate);
@@ -572,7 +598,6 @@
         return encodeURIComponent(msg);
       };
 
-      // WhatsApp One-Click Direct Share Handler
       const handleWhatsAppShare = (logItem) => {
         triggerHaptic(30);
         const custName = getTxnName(logItem);
@@ -933,6 +958,7 @@
       };
 
       const handleCustomerSearchAndSelect = (nameVal) => {
+        triggerHaptic(20);
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerName(match.name);
@@ -940,8 +966,8 @@
           setShowCustSuggestions(false);
           fetchLastBalanceInBackground(match.name, false);
         } else {
-          setCustomerName(""); setCustomerCity(""); setLastBalanceAmount(0); setLastBilledInfo(null);
-          triggerNotification("Select valid customer from database.");
+          setCustomerName(nameVal);
+          setShowCustSuggestions(false);
         }
       };
 
@@ -1041,7 +1067,7 @@
         let rawInput = parserInput.trim();
         if (!rawInput) return;
 
-        triggerHaptic(30); // Single subtle vibration on adding item
+        triggerHaptic(30);
 
         if (autocompleteSuggestion) rawInput = rawInput + autocompleteSuggestion;
 
@@ -1270,7 +1296,7 @@
       const handleGenerateAndPrintBill = async () => {
         if (baggedItems.length === 0) return;
         
-        triggerHaptic(40); // Single vibration on print click
+        triggerHaptic(40);
 
         const synchronousIsEdit = !!editingBillId;
         const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
@@ -1468,7 +1494,7 @@
           e.preventDefault();
           e.stopPropagation();
         }
-        triggerHaptic(30); // Subtle vibration when choosing suggestion pill
+        triggerHaptic(30);
         const trimmed = parserInput.trimStart();
         const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
         const currentQty = match ? match[1] : "1";
@@ -1570,8 +1596,6 @@
           await bleCharacteristic.writeValue(bytes.slice(i, i + 20));
         }
       };
-
-      const filteredSheetsCustomers = customerName.trim() === "" ? [] : dbCustomers.filter(c => c && c.name && c.name.toLowerCase().includes(customerName.toLowerCase()));
 
       const filteredReportBills = useMemo(() => {
         let startMs = 0, endMs = Infinity;
@@ -1745,7 +1769,7 @@
             </div>
           )}
 
-          {/* Top Bar with Customer Name (Fixed ~15% Screen Ratio) & Editable X% */}
+          {/* Top Bar with Improved Customer Search */}
           <div className="bg-white p-1.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-xs flex-shrink-0">
             <div className="flex gap-1 items-center font-sans h-10 overflow-x-auto custom-scroll">
               
@@ -1757,24 +1781,33 @@
                 <i className="fa-solid fa-sync text-xs"></i>
               </button>
               
-              <div className="w-[15%] min-w-[70px] relative flex-shrink-0" ref={custRef}>
+              {/* Customer Search Input Field with Reliable Touch/Click Handlers */}
+              <div className="w-[18%] min-w-[80px] max-w-[130px] relative flex-shrink-0" ref={custRef}>
                 <input 
                   type="text" 
                   autoComplete="off"
                   autoCorrect="off"
                   spellCheck="false"
-                  placeholder="Customer..."
+                  placeholder="Search Cust..."
                   value={customerName}
                   onChange={(e) => { setCustomerName(e.target.value); setShowCustSuggestions(true); }}
                   onFocus={() => setShowCustSuggestions(true)}
-                  className="w-full px-2 h-9 text-xs bg-stone-50 border rounded-lg font-bold focus:border-stone-800 focus:outline-none focus:bg-white"
+                  className="w-full px-2 h-9 text-xs bg-stone-50 border border-stone-300 rounded-lg font-bold focus:border-stone-900 focus:outline-none focus:bg-white text-stone-900"
                 />
                 {showCustSuggestions && filteredSheetsCustomers.length > 0 && (
-                  <div className="absolute top-full mt-1 left-0 w-48 overflow-y-auto max-h-44 bg-white border border-stone-300 rounded-xl shadow-xl z-50 divide-y divide-stone-100 animate-slide-up">
+                  <div className="absolute top-full mt-1 left-0 w-60 max-h-56 overflow-y-auto bg-white border-2 border-stone-800 rounded-xl shadow-2xl z-50 divide-y divide-stone-100 animate-slide-up custom-scroll">
                     {filteredSheetsCustomers.map((c, i) => (
-                      <div key={i} onMouseDown={() => handleCustomerSearchAndSelect(c.name)} className="px-3 py-2.5 text-xs hover:bg-stone-100 cursor-pointer flex justify-between items-center font-bold">
-                        <span>{c.name}</span>
-                        {c.city && <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 text-stone-600 rounded font-mono font-bold">{getCityCode(c.city)}</span>}
+                      <div 
+                        key={i} 
+                        onMouseDown={(e) => { e.preventDefault(); handleCustomerSearchAndSelect(c.name); }}
+                        onTouchStart={(e) => { e.preventDefault(); handleCustomerSearchAndSelect(c.name); }}
+                        className="px-3 py-2.5 text-xs hover:bg-amber-50 cursor-pointer flex justify-between items-center font-bold text-stone-900 active:bg-amber-100"
+                      >
+                        <div className="flex flex-col min-w-0 pr-1">
+                          <span className="uppercase text-stone-950 font-black truncate">{c.name}</span>
+                          {c.phone && <span className="text-[9px] text-stone-500 font-mono font-normal">📞 {c.phone}</span>}
+                        </div>
+                        {c.city && <span className="text-[9px] bg-stone-100 px-1.5 py-0.5 text-stone-700 rounded font-mono font-black uppercase flex-shrink-0">{getCityCode(c.city)}</span>}
                       </div>
                     ))}
                   </div>
@@ -1863,7 +1896,7 @@
                   </div>
                 </div>
 
-                {/* Fast Parser Entry Box with Mic Voice Assistant & Language Selector */}
+                {/* Fast Parser Entry Box with Voice Mic Assistant */}
                 <div className="bg-white p-1.5 border rounded-xl shadow-xs relative flex-shrink-0 space-y-1">
                   <form onSubmit={handleParserSubmit} className="flex gap-1 items-center">
                     <div className="relative flex-grow">
@@ -1939,7 +1972,7 @@
                       <ul className="list-disc pl-3.5 space-y-0.5 text-[9px] font-semibold">
                         <li><strong>12 number / 12 nambar / 12 ਨੰਬਰ</strong> $\rightarrow$ Automatically converted to <span className="font-mono font-bold">12no</span>.</li>
                         <li><strong>5 sehra 40n</strong> or <strong>2 paranda 60</strong> $\rightarrow$ Direct items with rates.</li>
-                        <li><strong>Language Toggle (PA/HI/EN):</strong> Tap button next to mic to switch between Punjabi, Hindi, or English recognition.</li>
+                        <li><strong>Language Toggle (PA/HI/EN):</strong> Tap button next to mic to switch language.</li>
                       </ul>
                     </div>
                   )}
@@ -2128,7 +2161,7 @@
               </div>
             )}
 
-            {/* HISTORIC TAB WITH WHATSAPP ONE-CLICK DIRECT SHARE */}
+            {/* HISTORIC TAB WITH PROMINENT WHATSAPP SHARE OPTION */}
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 
@@ -2201,14 +2234,14 @@
                                 {visibleLogPreviews[bId] ? '- Close' : '+ Preview'}
                               </button>
                               
-                              {/* Direct WhatsApp One-Click Share Button */}
+                              {/* Direct WhatsApp One-Click Share Option */}
                               <button 
                                 type="button" 
                                 onClick={() => handleWhatsAppShare(b)} 
-                                title="Share Bill directly via WhatsApp"
-                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 active:scale-95"
+                                title="Share Bill via WhatsApp"
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[9px] font-black uppercase flex items-center gap-1 active:scale-95 shadow-xs"
                               >
-                                <i className="fa-brands fa-whatsapp text-emerald-600 text-xs"></i> WhatsApp
+                                <i className="fa-brands fa-whatsapp text-xs"></i> WhatsApp
                               </button>
 
                               <button type="button" onClick={() => handleLogsItemPrint(b)} className="px-2 py-1 bg-stone-100 border rounded-lg text-[9px] font-bold uppercase active:scale-95">Print</button>
