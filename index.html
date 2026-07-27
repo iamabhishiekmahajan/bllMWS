@@ -112,7 +112,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         const swCode = `
-          const CACHE_NAME = 'rough-bill-v5';
+          const CACHE_NAME = 'rough-bill-v6';
           self.addEventListener('install', e => self.skipWaiting());
           self.addEventListener('activate', e => e.waitUntil(clients.claim()));
           self.addEventListener('fetch', e => {
@@ -134,6 +134,13 @@
 
     const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
     const DEFAULT_LAST_BAL_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
+
+    // Subtle Haptic Vibration Helper
+    const triggerHaptic = (ms = 30) => {
+      if (navigator.vibrate) {
+        try { navigator.vibrate(ms); } catch (e) {}
+      }
+    };
 
     const getTxnName = (t) => t ? String(t.name || t.Name || t.customerName || t.CustomerName || t.Customer || t.customer || "") : "";
     const getTxnAmount = (t) => {
@@ -355,7 +362,6 @@
 
         const saveAmount = Math.round(bill.currentBillAmount || bill.totalAmount || 0);
 
-        // DO NOT SAVE OR OVERWRITE CUSTOMER'S X DISCOUNT IN SHEETS
         const payload = {
           action: isEdit ? 'updateTxn' : 'addTxn',
           txn: {
@@ -430,7 +436,6 @@
       const [customerCity, setCustomerCity] = useState("");
       const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
       
-      // Default X% is 15 (Editable, NOT changed when selecting customer)
       const [discountX, setDiscountX] = useState("15");
 
       const [baggedItems, setBaggedItems] = useState([]);
@@ -447,7 +452,7 @@
 
       // Voice Input Speech Recognition States
       const [isListening, setIsListening] = useState(false);
-      const [voiceLang, setVoiceLang] = useState("pa-IN"); // pa-IN (Punjabi), hi-IN (Hindi), en-IN (English)
+      const [voiceLang, setVoiceLang] = useState("pa-IN");
       const [showVoiceTips, setShowVoiceTips] = useState(false);
       const recognitionRef = useRef(null);
 
@@ -529,20 +534,72 @@
         setTimeout(() => setNotification(""), 3500);
       };
 
-      // Voice Parsing Function: Handles "12 number" / "120 nambar" / "12 ਨੰਬਰ" -> "12no" / "120no"
+      // Lookup customer phone number from dbCustomers
+      const getCustomerPhone = (custName) => {
+        if (!custName) return "";
+        const norm = getNormalizedKey(custName);
+        const match = dbCustomers.find(c => c && getNormalizedKey(c.name) === norm);
+        if (match && (match.phone || match.Phone)) {
+          let clean = String(match.phone || match.Phone).replace(/\D/g, "");
+          if (clean.length === 10) clean = "91" + clean;
+          return clean;
+        }
+        return "";
+      };
+
+      // Format clean WhatsApp bill text summary
+      const generateWhatsAppText = (itemsList, custName, activeDate, totalAmt) => {
+        const printName = formatCustomerNameJI(custName);
+        const dateStr = formatDDMM(activeDate);
+        const safeItems = Array.isArray(itemsList) ? itemsList : [];
+        
+        let msg = `🧾 *ESTIMATE RECEIPT*\n`;
+        msg += `*Customer:* ${printName}\n`;
+        if (dateStr) msg += `*Date:* ${dateStr}\n`;
+        msg += `------------------------\n`;
+        
+        safeItems.forEach((item) => {
+          const qty = Math.round(item.qty || 1);
+          const name = String(item.name || "Item").trim().toUpperCase();
+          const unitP = Math.round(item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || 0));
+          const itemAmt = Math.round(getItemTotalAmount(item));
+          msg += `▪ ${qty}x ${name} @ ₹${unitP} = ₹${itemAmt}\n`;
+        });
+        
+        msg += `------------------------\n`;
+        msg += `*TOTAL:* ₹${Math.round(totalAmt)}\n\n`;
+        msg += `_Thank You For Your Visit!_`;
+        return encodeURIComponent(msg);
+      };
+
+      // WhatsApp One-Click Direct Share Handler
+      const handleWhatsAppShare = (logItem) => {
+        triggerHaptic(30);
+        const custName = getTxnName(logItem);
+        const items = parseItemsSafely(getTxnItems(logItem));
+        const rawDate = getTxnDate(logItem) || logItem.timestamp;
+        const amt = getTxnAmount(logItem);
+        const phone = getCustomerPhone(custName);
+        const textEncoded = generateWhatsAppText(items, custName, rawDate, amt);
+        
+        let url = "";
+        if (phone) {
+          url = `https://wa.me/${phone}?text=${textEncoded}`;
+        } else {
+          url = `https://api.whatsapp.com/send?text=${textEncoded}`;
+        }
+        window.open(url, "_blank");
+      };
+
       const processVoiceText = (text) => {
         if (!text) return "";
         let s = String(text).toLowerCase().trim();
-        
-        // Convert spoken Punjabi/Hindi/English number suffixes
         s = s.replace(/(\d+)\s*(?:number|nambar|no|ਨੰਬਰ|ਨੰ|ਨੋ|नंबर|नं|ਨੰ:)\b/gi, "$1no");
         s = s.replace(/(\d+)\s*(?:nu|ਨੂ|नु)\b/gi, "$1nu");
         s = s.replace(/(\d+)\s*(?:n|ਐਨ|एन)\b/gi, "$1n");
-
         return s;
       };
 
-      // Initialize Web Speech Recognition
       const toggleVoiceRecognition = () => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
@@ -568,6 +625,7 @@
           };
 
           recognition.onresult = (event) => {
+            triggerHaptic(30);
             const rawTranscript = event.results[0][0].transcript;
             const formatted = processVoiceText(rawTranscript);
             setParserInput(formatted);
@@ -577,7 +635,6 @@
           };
 
           recognition.onerror = (e) => {
-            console.warn("Speech recognition error:", e);
             setIsListening(false);
             triggerNotification("Voice input failed or timed out. Try again.");
           };
@@ -589,7 +646,6 @@
           recognitionRef.current = recognition;
           recognition.start();
         } catch (err) {
-          console.error("Mic start error:", err);
           setIsListening(false);
         }
       };
@@ -785,8 +841,8 @@
 
             if (rawCusts) {
               let parsedCustomers = Array.isArray(rawCusts) 
-                ? rawCusts.map(c => ({ name: c.name || c.Name || "", phone: c.phone || "", city: (String(c.city || "").toLowerCase() === "local") ? "" : (c.city || "") }))
-                : Object.entries(rawCusts).map(([name, details]) => ({ name, city: details?.city || "" }));
+                ? rawCusts.map(c => ({ name: c.name || c.Name || "", phone: c.phone || c.Phone || c.discount || c.Discount || "", city: (String(c.city || "").toLowerCase() === "local") ? "" : (c.city || "") }))
+                : Object.entries(rawCusts).map(([name, details]) => ({ name, phone: details?.phone || details?.Phone || details?.discount || "", city: details?.city || "" }));
               setDbCustomers(parsedCustomers);
               window.firebaseBridge.customers = parsedCustomers;
               idbStorage.cacheCustomers(parsedCustomers);
@@ -876,13 +932,11 @@
         return "";
       };
 
-      // SELECT CUSTOMER WITHOUT CHANGING discountX RATE
       const handleCustomerSearchAndSelect = (nameVal) => {
         const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
         if (match) {
           setCustomerName(match.name);
           setCustomerCity(match.city && String(match.city).toLowerCase() !== "local" ? match.city : "");
-          // DO NOT CHANGE discountX HERE
           setShowCustSuggestions(false);
           fetchLastBalanceInBackground(match.name, false);
         } else {
@@ -987,6 +1041,8 @@
         let rawInput = parserInput.trim();
         if (!rawInput) return;
 
+        triggerHaptic(30); // Single subtle vibration on adding item
+
         if (autocompleteSuggestion) rawInput = rawInput + autocompleteSuggestion;
 
         const isSuffixCode = (str) => {
@@ -1084,6 +1140,7 @@
       };
 
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
+        triggerHaptic(30);
         const amt = parseFloat(lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10") || 0;
         setBaggedItems(prev => prev.map(item => {
           if (getNormalizedKey(item.name) === groupKey) {
@@ -1213,6 +1270,8 @@
       const handleGenerateAndPrintBill = async () => {
         if (baggedItems.length === 0) return;
         
+        triggerHaptic(40); // Single vibration on print click
+
         const synchronousIsEdit = !!editingBillId;
         const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
         const printDateFormatted = formatInvoiceDateTime(billDate);
@@ -1271,6 +1330,7 @@
       };
 
       const handlePrintWorkerSlip = () => {
+        triggerHaptic(40);
         const textToPrint = workerNoteInput.trim() || baggedItems.map(i => `${Math.round(i.qty)} ${i.name}`).join("\n");
         if (!textToPrint) {
           triggerNotification("Enter items or add draft products first.");
@@ -1297,6 +1357,7 @@
       };
 
       const shareBillImage = (items, custName, cityVal, activeDate) => {
+        triggerHaptic(30);
         const exportContainer = document.getElementById("image-export-container");
         if (!exportContainer) return;
 
@@ -1340,6 +1401,7 @@
       };
 
       const handleLogsItemPrint = (logItem) => {
+        triggerHaptic(40);
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           const rawDate = getTxnDate(logItem) || logItem.timestamp;
@@ -1406,6 +1468,7 @@
           e.preventDefault();
           e.stopPropagation();
         }
+        triggerHaptic(30); // Subtle vibration when choosing suggestion pill
         const trimmed = parserInput.trimStart();
         const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
         const currentQty = match ? match[1] : "1";
@@ -1533,6 +1596,7 @@
       }, [cloudBills, reportPreset, reportStartDate, reportEndDate]);
 
       const handlePrintDateRangeReport = () => {
+        triggerHaptic(40);
         if (filteredReportBills.length === 0) {
           triggerNotification("No registered customer bills found.");
           return;
@@ -1693,7 +1757,6 @@
                 <i className="fa-solid fa-sync text-xs"></i>
               </button>
               
-              {/* Customer Name Field: Fixed ~15% horizontal screen ratio */}
               <div className="w-[15%] min-w-[70px] relative flex-shrink-0" ref={custRef}>
                 <input 
                   type="text" 
@@ -1727,7 +1790,6 @@
                 className="w-11 px-1 h-9 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none focus:bg-white font-bold uppercase flex-shrink-0"
               />
               
-              {/* Editable X% (Default 15, unlinked from customer selection) */}
               <div className="flex items-center gap-0.5 flex-shrink-0">
                 <span className="text-[8px] text-stone-400 font-black">X%:</span>
                 <input 
@@ -1830,7 +1892,6 @@
                       )}
                     </div>
 
-                    {/* Mic Button */}
                     <button 
                       type="button" 
                       onClick={toggleVoiceRecognition}
@@ -1840,7 +1901,6 @@
                       <i className={`fa-solid ${isListening ? 'fa-microphone-lines text-base' : 'fa-microphone'}`}></i>
                     </button>
 
-                    {/* Language Switcher Pill */}
                     <button 
                       type="button" 
                       onClick={() => {
@@ -1853,7 +1913,6 @@
                       {voiceLang === 'pa-IN' ? 'PA' : voiceLang === 'hi-IN' ? 'HI' : 'EN'}
                     </button>
 
-                    {/* Print Button */}
                     <button 
                       type="button" 
                       onClick={handleGenerateAndPrintBill}
@@ -1864,7 +1923,6 @@
                     </button>
                   </form>
 
-                  {/* Voice Input Tips Toggle Bar */}
                   <div className="flex justify-between items-center text-[9px] font-bold text-stone-500 px-1 pt-0.5">
                     <span className="flex items-center gap-1">
                       <i className="fa-solid fa-circle-info text-amber-600"></i>
@@ -1875,7 +1933,6 @@
                     </button>
                   </div>
 
-                  {/* Collapsible Voice Usage Suggestions */}
                   {showVoiceTips && (
                     <div className="bg-amber-50 p-2 border border-amber-200 rounded-lg text-[10px] text-amber-950 space-y-1 animate-slide-up font-sans">
                       <div className="font-black uppercase text-[9px] text-amber-900 border-b border-amber-200 pb-0.5">🗣️ Voice Assistant Guide (Punjabi / Hindi / English)</div>
@@ -2071,7 +2128,7 @@
               </div>
             )}
 
-            {/* HISTORIC TAB */}
+            {/* HISTORIC TAB WITH WHATSAPP ONE-CLICK DIRECT SHARE */}
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 
@@ -2143,8 +2200,19 @@
                               <button type="button" onClick={() => toggleLogItemPreview(bId)} className="px-2 py-1 bg-amber-100 border border-amber-200 rounded-lg text-[9px] font-black text-amber-900 active:scale-95">
                                 {visibleLogPreviews[bId] ? '- Close' : '+ Preview'}
                               </button>
+                              
+                              {/* Direct WhatsApp One-Click Share Button */}
+                              <button 
+                                type="button" 
+                                onClick={() => handleWhatsAppShare(b)} 
+                                title="Share Bill directly via WhatsApp"
+                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-[9px] font-black uppercase flex items-center gap-1 active:scale-95"
+                              >
+                                <i className="fa-brands fa-whatsapp text-emerald-600 text-xs"></i> WhatsApp
+                              </button>
+
                               <button type="button" onClick={() => handleLogsItemPrint(b)} className="px-2 py-1 bg-stone-100 border rounded-lg text-[9px] font-bold uppercase active:scale-95">Print</button>
-                              <button type="button" onClick={() => shareBillImage(getTxnItems(b), bName, bCity, bDate)} className="px-2 py-1 bg-emerald-50 text-emerald-800 border rounded-lg text-[9px] font-bold uppercase active:scale-95">Share</button>
+                              <button type="button" onClick={() => shareBillImage(getTxnItems(b), bName, bCity, bDate)} className="px-2 py-1 bg-sky-50 text-sky-800 border rounded-lg text-[9px] font-bold uppercase active:scale-95">Image</button>
                               <button type="button" onClick={() => handleLoadHistoricalBill(b)} className="px-2 py-1 bg-stone-900 text-white rounded-lg text-[9px] font-bold uppercase active:scale-95">Load</button>
                               <button type="button" onClick={() => setBillToDelete(b)} className="px-2 py-1 bg-rose-100 text-rose-700 border rounded-lg text-[9px] active:scale-95"><i className="fa-solid fa-trash-can"></i></button>
                             </div>
