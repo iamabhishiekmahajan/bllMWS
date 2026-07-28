@@ -112,7 +112,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         const swCode = `
-          const CACHE_NAME = 'rough-bill-v7';
+          const CACHE_NAME = 'rough-bill-v9';
           self.addEventListener('install', e => self.skipWaiting());
           self.addEventListener('activate', e => e.waitUntil(clients.claim()));
           self.addEventListener('fetch', e => {
@@ -450,12 +450,6 @@
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
 
-      // Voice Input Speech Recognition
-      const [isListening, setIsListening] = useState(false);
-      const [voiceLang, setVoiceLang] = useState("pa-IN");
-      const [showVoiceTips, setShowVoiceTips] = useState(false);
-      const recognitionRef = useRef(null);
-
       const [isVerified, setIsVerified] = useState(false);
       const [passInput, setPassInput] = useState("");
       const lockTimerRef = useRef(null);
@@ -479,7 +473,6 @@
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
       const [lastBilledInfo, setLastBilledInfo] = useState(null);
 
-      // Print settings with showSNo defaulting to true
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
@@ -554,7 +547,7 @@
         };
       }, []);
 
-      // Filtered Customers - Shows top matches even when input is blank
+      // Filtered Customers - Universal parser matching search bar
       const filteredSheetsCustomers = useMemo(() => {
         if (!dbCustomers || !Array.isArray(dbCustomers)) return [];
         const query = customerName.trim().toLowerCase();
@@ -614,65 +607,6 @@
           url = `https://api.whatsapp.com/send?text=${textEncoded}`;
         }
         window.open(url, "_blank");
-      };
-
-      const processVoiceText = (text) => {
-        if (!text) return "";
-        let s = String(text).toLowerCase().trim();
-        s = s.replace(/(\d+)\s*(?:number|nambar|no|ਨੰਬਰ|ਨੰ|ਨੋ|नंबर|नं|ਨੰ:)\b/gi, "$1no");
-        s = s.replace(/(\d+)\s*(?:nu|ਨੂ|नु)\b/gi, "$1nu");
-        s = s.replace(/(\d+)\s*(?:n|ਐਨ|एन)\b/gi, "$1n");
-        return s;
-      };
-
-      const toggleVoiceRecognition = () => {
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-          triggerNotification("Speech recognition is not supported on this browser.");
-          return;
-        }
-
-        if (isListening) {
-          if (recognitionRef.current) recognitionRef.current.stop();
-          setIsListening(false);
-          return;
-        }
-
-        try {
-          const recognition = new SpeechRecognition();
-          recognition.lang = voiceLang;
-          recognition.continuous = false;
-          recognition.interimResults = false;
-
-          recognition.onstart = () => {
-            setIsListening(true);
-            triggerNotification(`🎙️ Listening (${voiceLang === 'pa-IN' ? 'Punjabi' : voiceLang === 'hi-IN' ? 'Hindi' : 'English'})... Speak item!`);
-          };
-
-          recognition.onresult = (event) => {
-            triggerHaptic(30);
-            const rawTranscript = event.results[0][0].transcript;
-            const formatted = processVoiceText(rawTranscript);
-            setParserInput(formatted);
-            setIsListening(false);
-            triggerNotification(`✓ Heard: "${formatted}"`);
-            if (parserRef.current) parserRef.current.focus();
-          };
-
-          recognition.onerror = (e) => {
-            setIsListening(false);
-            triggerNotification("Voice input failed or timed out. Try again.");
-          };
-
-          recognition.onend = () => {
-            setIsListening(false);
-          };
-
-          recognitionRef.current = recognition;
-          recognition.start();
-        } catch (err) {
-          setIsListening(false);
-        }
       };
 
       const getNormalizedKey = (str) => str ? String(str).toLowerCase().trim().replace(/\s+/g, ' ') : "";
@@ -865,9 +799,30 @@
             const rawTxns = data.txns || data.Txns || data.transactions || data.Transactions || [];
 
             if (rawCusts) {
-              let parsedCustomers = Array.isArray(rawCusts) 
-                ? rawCusts.map(c => ({ name: c.name || c.Name || "", phone: c.phone || c.Phone || c.discount || c.Discount || "", city: (String(c.city || "").toLowerCase() === "local") ? "" : (c.city || "") }))
-                : Object.entries(rawCusts).map(([name, details]) => ({ name, phone: details?.phone || details?.Phone || details?.discount || "", city: details?.city || "" }));
+              let parsedCustomers = [];
+              if (Array.isArray(rawCusts)) {
+                parsedCustomers = rawCusts.map(c => {
+                  if (typeof c === 'string') return { name: c, phone: "", city: "" };
+                  if (typeof c === 'object' && c !== null) {
+                    const name = c.name || c.Name || c.customerName || c.CustomerName || c[0] || "";
+                    const phone = c.phone || c.Phone || c.discount || c.Discount || c[1] || "";
+                    const rawCity = String(c.city || c.City || c[2] || "");
+                    const city = (rawCity.toLowerCase() === "local") ? "" : rawCity;
+                    return { name, phone, city };
+                  }
+                  return null;
+                }).filter(c => c && c.name);
+              } else if (typeof rawCusts === 'object' && rawCusts !== null) {
+                parsedCustomers = Object.entries(rawCusts).map(([name, details]) => {
+                  if (typeof details === 'object' && details !== null) {
+                    const phone = details.phone || details.Phone || details.discount || details.Discount || "";
+                    const rawCity = String(details.city || details.City || "");
+                    const city = (rawCity.toLowerCase() === "local") ? "" : rawCity;
+                    return { name, phone, city };
+                  }
+                  return { name, phone: "", city: "" };
+                }).filter(c => c && c.name);
+              }
               setDbCustomers(parsedCustomers);
               window.firebaseBridge.customers = parsedCustomers;
               idbStorage.cacheCustomers(parsedCustomers);
@@ -1514,18 +1469,22 @@
 
       const visibleHistoricBills = isVerified ? last7DaysBills : last7DaysBills.slice(0, 3);
 
-      const handlePasscodeUnlockInput = (e) => {
-        const val = e.target.value;
-        setPassInput(val);
-        if (val === "ab") {
-          setIsVerified(true);
-          triggerNotification("Unlocked for 2 minutes!");
-          if (lockTimerRef.current) clearTimeout(lockTimerRef.current);
-          lockTimerRef.current = setTimeout(() => {
-            setIsVerified(false);
-            setPassInput("");
-            triggerNotification("Locked automatically after 2 minutes.");
-          }, 120000);
+      // Passcode Handler: Typing "ab" and pressing ENTER unlocks for 2 mins
+      const handlePasscodeKeyDown = (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (passInput.trim() === "ab") {
+            setIsVerified(true);
+            triggerNotification("Unlocked last 7 days bills for 2 minutes!");
+            if (lockTimerRef.current) clearTimeout(lockTimerRef.current);
+            lockTimerRef.current = setTimeout(() => {
+              setIsVerified(false);
+              setPassInput("");
+              triggerNotification("Locked automatically after 2 minutes.");
+            }, 120000);
+          } else {
+            triggerNotification("Invalid passcode key.");
+          }
         }
       };
 
@@ -1769,9 +1728,9 @@
             </div>
           )}
 
-          {/* Top Bar with Improved Customer Search */}
-          <div className="bg-white p-1.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-xs flex-shrink-0">
-            <div className="flex gap-1 items-center font-sans h-10 overflow-x-auto custom-scroll">
+          {/* Top Bar with Fixed Non-Clipping Customer Search */}
+          <div className="bg-white p-1.5 border-b border-stone-200 no-print w-full max-w-md mx-auto z-40 shadow-xs flex-shrink-0 relative">
+            <div className="flex gap-1 items-center font-sans h-10">
               
               <button type="button" onClick={() => setShowNewBillConfirmModal(true)} title="New Bill Reset" className="h-9 w-9 flex items-center justify-center bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-black shadow-xs active:scale-95 flex-shrink-0">
                 <i className="fa-solid fa-plus text-base"></i>
@@ -1781,8 +1740,8 @@
                 <i className="fa-solid fa-sync text-xs"></i>
               </button>
               
-              {/* Customer Search Input Field with Reliable Touch/Click Handlers */}
-              <div className="w-[18%] min-w-[80px] max-w-[130px] relative flex-shrink-0" ref={custRef}>
+              {/* Reliable Customer Search Field */}
+              <div className="flex-1 min-w-[75px] max-w-[130px] relative flex-shrink-0" ref={custRef}>
                 <input 
                   type="text" 
                   autoComplete="off"
@@ -1799,6 +1758,7 @@
                     {filteredSheetsCustomers.map((c, i) => (
                       <div 
                         key={i} 
+                        onClick={() => handleCustomerSearchAndSelect(c.name)}
                         onMouseDown={(e) => { e.preventDefault(); handleCustomerSearchAndSelect(c.name); }}
                         onTouchStart={(e) => { e.preventDefault(); handleCustomerSearchAndSelect(c.name); }}
                         className="px-3 py-2.5 text-xs hover:bg-amber-50 cursor-pointer flex justify-between items-center font-bold text-stone-900 active:bg-amber-100"
@@ -1896,9 +1856,9 @@
                   </div>
                 </div>
 
-                {/* Fast Parser Entry Box with Voice Mic Assistant */}
-                <div className="bg-white p-1.5 border rounded-xl shadow-xs relative flex-shrink-0 space-y-1">
-                  <form onSubmit={handleParserSubmit} className="flex gap-1 items-center">
+                {/* Fast Parser Entry Box */}
+                <div className="bg-white p-1.5 border rounded-xl shadow-xs relative flex-shrink-0">
+                  <form onSubmit={handleParserSubmit} className="flex gap-1.5 items-center">
                     <div className="relative flex-grow">
                       <input 
                         ref={parserRef} 
@@ -1906,7 +1866,7 @@
                         autoComplete="off"
                         autoCorrect="off"
                         spellCheck="false"
-                        placeholder="Fast Draft e.g. 12 sehra 40n or mic" 
+                        placeholder="Fast Draft e.g. 12 sehra 40n or 120n" 
                         value={parserInput} 
                         onChange={e => setParserInput(e.target.value)} 
                         onKeyDown={(e) => {
@@ -1915,10 +1875,10 @@
                             setParserInput(prev => prev + autocompleteSuggestion + " ");
                           }
                         }}
-                        className="w-full pl-3 pr-1.5 py-2 h-11 text-xs bg-stone-50 border-2 border-stone-800 rounded-lg font-mono font-black focus:outline-none focus:bg-white text-stone-900 z-10 relative bg-transparent"
+                        className="w-full px-3 py-2 h-11 text-xs bg-stone-50 border-2 border-stone-800 rounded-lg font-mono font-black focus:outline-none focus:bg-white text-stone-900 z-10 relative bg-transparent"
                       />
                       {printSettings.enableInlineAutocomplete && autocompleteSuggestion && (
-                        <div className="absolute inset-0 pl-3 pr-1.5 py-2 h-11 text-xs font-mono font-black flex items-center pointer-events-none z-0 overflow-hidden whitespace-pre">
+                        <div className="absolute inset-0 px-3 py-2 h-11 text-xs font-mono font-black flex items-center pointer-events-none z-0 overflow-hidden whitespace-pre">
                           <span className="opacity-0">{parserInput}</span>
                           <span className="text-stone-400 opacity-60 bg-amber-100/50 px-0.5 rounded">{autocompleteSuggestion}</span>
                         </div>
@@ -1927,55 +1887,13 @@
 
                     <button 
                       type="button" 
-                      onClick={toggleVoiceRecognition}
-                      title="Speak item in Punjabi/Hindi/English"
-                      className={`h-11 w-11 flex items-center justify-center rounded-lg text-sm font-black transition-all flex-shrink-0 shadow-xs ${isListening ? 'bg-rose-600 text-white animate-pulse-glow' : 'bg-amber-400 hover:bg-amber-500 text-stone-950'}`}
-                    >
-                      <i className={`fa-solid ${isListening ? 'fa-microphone-lines text-base' : 'fa-microphone'}`}></i>
-                    </button>
-
-                    <button 
-                      type="button" 
-                      onClick={() => {
-                        const nextLang = voiceLang === 'pa-IN' ? 'hi-IN' : (voiceLang === 'hi-IN' ? 'en-IN' : 'pa-IN');
-                        setVoiceLang(nextLang);
-                        triggerNotification(`Voice set to ${nextLang === 'pa-IN' ? 'Punjabi' : nextLang === 'hi-IN' ? 'Hindi' : 'English'}`);
-                      }}
-                      className="h-11 px-1.5 bg-stone-100 hover:bg-stone-200 border rounded-lg text-[9px] font-black uppercase text-stone-700 flex-shrink-0"
-                    >
-                      {voiceLang === 'pa-IN' ? 'PA' : voiceLang === 'hi-IN' ? 'HI' : 'EN'}
-                    </button>
-
-                    <button 
-                      type="button" 
                       onClick={handleGenerateAndPrintBill}
                       disabled={baggedItems.length === 0}
-                      className={`h-11 px-3.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1 shadow-sm active:scale-95 transition-all flex-shrink-0 ${baggedItems.length > 0 ? 'bg-stone-900 hover:bg-black text-white' : 'bg-stone-200 text-stone-400 cursor-not-allowed'}`}
+                      className={`h-11 px-4 rounded-lg text-xs font-black uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-all ${baggedItems.length > 0 ? 'bg-stone-900 hover:bg-black text-white' : 'bg-stone-200 text-stone-400 cursor-not-allowed'}`}
                     >
                       <i className="fa-solid fa-print"></i> PRINT
                     </button>
                   </form>
-
-                  <div className="flex justify-between items-center text-[9px] font-bold text-stone-500 px-1 pt-0.5">
-                    <span className="flex items-center gap-1">
-                      <i className="fa-solid fa-circle-info text-amber-600"></i>
-                      <span>Voice: Say <span className="font-mono font-bold text-stone-800">"12 chura 120 number"</span> $\rightarrow$ <span className="font-mono font-black text-amber-700">120no</span></span>
-                    </span>
-                    <button type="button" onClick={() => setShowVoiceTips(!showVoiceTips)} className="text-amber-800 underline font-black">
-                      {showVoiceTips ? 'Hide Tips' : 'Voice Examples'}
-                    </button>
-                  </div>
-
-                  {showVoiceTips && (
-                    <div className="bg-amber-50 p-2 border border-amber-200 rounded-lg text-[10px] text-amber-950 space-y-1 animate-slide-up font-sans">
-                      <div className="font-black uppercase text-[9px] text-amber-900 border-b border-amber-200 pb-0.5">🗣️ Voice Assistant Guide (Punjabi / Hindi / English)</div>
-                      <ul className="list-disc pl-3.5 space-y-0.5 text-[9px] font-semibold">
-                        <li><strong>12 number / 12 nambar / 12 ਨੰਬਰ</strong> $\rightarrow$ Automatically converted to <span className="font-mono font-bold">12no</span>.</li>
-                        <li><strong>5 sehra 40n</strong> or <strong>2 paranda 60</strong> $\rightarrow$ Direct items with rates.</li>
-                        <li><strong>Language Toggle (PA/HI/EN):</strong> Tap button next to mic to switch language.</li>
-                      </ul>
-                    </div>
-                  )}
                 </div>
 
                 {/* BAGGED ITEMS LIST */}
@@ -1983,7 +1901,7 @@
                   
                   {baggedItems.length === 0 ? (
                     <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border border-dashed shadow-xs">
-                      Bag is empty. Enter items above (e.g. <span className="font-mono text-stone-600">5 chura 120no</span> or tap <i className="fa-solid fa-microphone text-amber-600"></i> Mic) & press Enter.
+                      Bag is empty. Enter items above (e.g. <span className="font-mono text-stone-600">5 chura 120no</span> or <span className="font-mono text-stone-600">120n</span>) & press Enter.
                     </div>
                   ) : (
                     <>
@@ -2161,55 +2079,26 @@
               </div>
             )}
 
-            {/* HISTORIC TAB WITH PROMINENT WHATSAPP SHARE OPTION */}
+            {/* HISTORIC TAB (HISTORIC BILLS LIST PLACED ABOVE LEDGER SUMMARY) */}
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 
-                <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
-                  <div className="flex justify-between items-center border-b pb-1">
-                    <span className="text-[10px] font-black uppercase text-stone-700 tracking-wider">Ledger Summary</span>
-                    <button type="button" onClick={handlePrintDateRangeReport} className="px-3 py-1.5 bg-amber-500 text-stone-950 font-black rounded-lg text-[10px] uppercase active:scale-95"><i className="fa-solid fa-print"></i> Print Report</button>
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
-                    {[{ key: "2days", label: "2 Days" }, { key: "today", label: "Today" }, { key: "last7", label: "7 Days" }, { key: "custom", label: "Custom" }].map(preset => (
-                      <button key={preset.key} type="button" onClick={() => setReportPreset(preset.key)} className={`py-1.5 rounded-lg text-center uppercase border transition-colors ${reportPreset === preset.key ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}>{preset.label}</button>
-                    ))}
-                  </div>
-
-                  <div className="mt-2 max-h-36 overflow-y-auto custom-scroll border rounded-xl bg-stone-50 p-2 text-xs font-mono">
-                    <table className="w-full text-left">
-                      <thead>
-                        <tr className="border-b text-[9px] text-stone-500 uppercase font-sans font-bold">
-                          <th className="pb-1">Date</th>
-                          <th className="pb-1">Customer</th>
-                          <th className="pb-1 text-right">Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-stone-200">
-                        {filteredReportBills.map((b, i) => (
-                          <tr key={i} className="text-[10px]">
-                            <td className="py-1 text-stone-500">{formatDDMM(getTxnDate(b))}</td>
-                            <td className="py-1 font-bold uppercase text-stone-900 truncate max-w-[120px]">{formatCustomerNameJI(getTxnName(b))}</td>
-                            <td className="py-1 text-right font-black tracking-wide">₹{Math.round(getTxnAmount(b))}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
+                {/* 1. HISTORIC BILLS LIST (TOP POSITION) */}
                 <div className="flex-grow overflow-y-auto custom-scroll space-y-2 min-h-0 flex-1">
                   <div className="flex justify-between items-center border-b pb-1">
-                    <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider">
-                      Historic Bills (Last 7 Days - {isVerified ? 'All' : 'Showing 3'})
+                    <span className="text-[10px] font-black uppercase text-stone-500 tracking-wider">
+                      Historic Bills (Last 7 Days - {isVerified ? 'Unlocked All' : 'Showing 3'})
                     </span>
+                    
+                    {/* Empty Passcode Input: Type 'ab' and Press Enter to Unlock */}
                     <input 
                       type="password" 
-                      placeholder="..." 
+                      placeholder="" 
                       value={passInput}
-                      onChange={handlePasscodeUnlockInput}
-                      className="w-12 text-center p-1 border rounded-lg text-xs font-mono font-bold bg-white focus:outline-none"
+                      onChange={(e) => setPassInput(e.target.value)}
+                      onKeyDown={handlePasscodeKeyDown}
+                      title="Type 'ab' and press Enter to unlock"
+                      className="w-12 text-center p-0.5 border border-stone-300 rounded-lg text-xs font-mono font-bold bg-white focus:outline-none focus:border-stone-800"
                     />
                   </div>
 
@@ -2234,7 +2123,7 @@
                                 {visibleLogPreviews[bId] ? '- Close' : '+ Preview'}
                               </button>
                               
-                              {/* Direct WhatsApp One-Click Share Option */}
+                              {/* Direct WhatsApp One-Click Share */}
                               <button 
                                 type="button" 
                                 onClick={() => handleWhatsAppShare(b)} 
@@ -2277,6 +2166,42 @@
                     })}
                   </div>
                 </div>
+
+                {/* 2. LEDGER SUMMARY CARD (BOTTOM POSITION) */}
+                <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
+                  <div className="flex justify-between items-center border-b pb-1">
+                    <span className="text-[10px] font-black uppercase text-stone-700 tracking-wider">Ledger Summary</span>
+                    <button type="button" onClick={handlePrintDateRangeReport} className="px-3 py-1.5 bg-amber-500 text-stone-950 font-black rounded-lg text-[10px] uppercase active:scale-95"><i className="fa-solid fa-print"></i> Print Report</button>
+                  </div>
+
+                  <div className="grid grid-cols-4 gap-1 text-[10px] font-bold">
+                    {[{ key: "2days", label: "2 Days" }, { key: "today", label: "Today" }, { key: "last7", label: "7 Days" }, { key: "custom", label: "Custom" }].map(preset => (
+                      <button key={preset.key} type="button" onClick={() => setReportPreset(preset.key)} className={`py-1.5 rounded-lg text-center uppercase border transition-colors ${reportPreset === preset.key ? 'bg-stone-900 text-white font-black' : 'bg-stone-50 text-stone-700'}`}>{preset.label}</button>
+                    ))}
+                  </div>
+
+                  <div className="mt-2 max-h-36 overflow-y-auto custom-scroll border rounded-xl bg-stone-50 p-2 text-xs font-mono">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="border-b text-[9px] text-stone-500 uppercase font-sans font-bold">
+                          <th className="pb-1">Date</th>
+                          <th className="pb-1">Customer</th>
+                          <th className="pb-1 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-200">
+                        {filteredReportBills.map((b, i) => (
+                          <tr key={i} className="text-[10px]">
+                            <td className="py-1 text-stone-500">{formatDDMM(getTxnDate(b))}</td>
+                            <td className="py-1 font-bold uppercase text-stone-900 truncate max-w-[120px]">{formatCustomerNameJI(getTxnName(b))}</td>
+                            <td className="py-1 text-right font-black tracking-wide">₹{Math.round(getTxnAmount(b))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
               </div>
             )}
 
