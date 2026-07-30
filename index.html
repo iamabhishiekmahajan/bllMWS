@@ -130,6 +130,42 @@
     const DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx8CKL5noduGGl416gC_QhZZ8Sda3iDOsmz8z3rihcmJR2PPSkxAoua8DdIs57vx1L3/exec";
     const DEFAULT_LAST_BAL_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzHDEi_3-0oaLvlPqM3tJdDcMLCdOvr3DNRdl-DDOcAJu_oCJrLCrukhRycnN6nBcwY/exec";
 
+    // React Error Boundary Component
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+      componentDidCatch(error, errorInfo) {
+        console.error("ErrorBoundary caught an error:", error, errorInfo);
+      }
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="h-screen w-full flex flex-col items-center justify-center bg-stone-100 p-4 text-center">
+              <div className="bg-white p-6 rounded-2xl shadow-xl max-w-xs w-full space-y-3 border border-stone-200">
+                <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl font-bold">
+                  <i className="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <h2 className="text-sm font-black uppercase text-stone-900">App Notice</h2>
+                <p className="text-xs text-stone-500">An issue occurred during rendering. Please tap reload.</p>
+                <button 
+                  onClick={() => { this.setState({ hasError: false }); window.location.reload(); }} 
+                  className="w-full py-2.5 bg-stone-900 text-white rounded-xl text-xs font-bold uppercase tracking-wider"
+                >
+                  Reload App
+                </button>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
     const triggerHaptic = (ms = 30) => {
       if (navigator.vibrate) {
         try { navigator.vibrate(ms); } catch (e) {}
@@ -209,7 +245,7 @@
       const current = getDeletedProductKeys();
       if (!current.includes(key)) {
         current.push(key);
-        localStorage.setItem("deletedProductKeys", JSON.stringify(current));
+        try { localStorage.setItem("deletedProductKeys", JSON.stringify(current)); } catch(e) {}
       }
     };
 
@@ -222,7 +258,7 @@
       const strId = String(id);
       if (!current.includes(strId)) {
         current.push(strId);
-        localStorage.setItem("deletedBillIds", JSON.stringify(current));
+        try { localStorage.setItem("deletedBillIds", JSON.stringify(current)); } catch(e) {}
       }
     };
 
@@ -248,94 +284,123 @@
       dbPromise: null,
       init() {
         if (this.dbPromise) return this.dbPromise;
-        this.dbPromise = new Promise((resolve, reject) => {
-          const request = indexedDB.open("RoughBillDB", 3);
-          request.onupgradeneeded = (e) => {
-            const db = e.target.result;
-            if (!db.objectStoreNames.contains("bills")) db.createObjectStore("bills", { keyPath: "id" });
-            if (!db.objectStoreNames.contains("pendingSync")) db.createObjectStore("pendingSync", { keyPath: "id" });
-            if (!db.objectStoreNames.contains("products")) db.createObjectStore("products", { keyPath: "name" });
-            if (!db.objectStoreNames.contains("customers")) db.createObjectStore("customers", { keyPath: "name" });
-          };
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
+        this.dbPromise = new Promise((resolve) => {
+          try {
+            const request = indexedDB.open("RoughBillDB", 3);
+            request.onupgradeneeded = (e) => {
+              const db = e.target.result;
+              if (!db.objectStoreNames.contains("bills")) db.createObjectStore("bills", { keyPath: "id" });
+              if (!db.objectStoreNames.contains("pendingSync")) db.createObjectStore("pendingSync", { keyPath: "id" });
+              if (!db.objectStoreNames.contains("products")) db.createObjectStore("products", { keyPath: "name" });
+              if (!db.objectStoreNames.contains("customers")) db.createObjectStore("customers", { keyPath: "name" });
+            };
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => resolve(null);
+          } catch (e) { resolve(null); }
         });
         return this.dbPromise;
       },
       async saveBill(bill, isPending = false) {
         const db = await this.init();
+        if (!db) return false;
         return new Promise((resolve) => {
-          const tx = db.transaction(["bills", "pendingSync"], "readwrite");
-          tx.objectStore("bills").put(bill);
-          if (isPending) tx.objectStore("pendingSync").put(bill);
-          else tx.objectStore("pendingSync").delete(bill.id);
-          tx.oncomplete = () => resolve(true);
-          tx.onerror = () => resolve(false);
+          try {
+            const tx = db.transaction(["bills", "pendingSync"], "readwrite");
+            tx.objectStore("bills").put(bill);
+            if (isPending) tx.objectStore("pendingSync").put(bill);
+            else tx.objectStore("pendingSync").delete(bill.id);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+          } catch(e) { resolve(false); }
         });
       },
       async removeBill(id) {
         const db = await this.init();
+        if (!db) return false;
         return new Promise((resolve) => {
-          const tx = db.transaction(["bills", "pendingSync"], "readwrite");
-          tx.objectStore("bills").delete(id);
-          tx.objectStore("pendingSync").delete(id);
-          tx.oncomplete = () => resolve(true);
-          tx.onerror = () => resolve(false);
+          try {
+            const tx = db.transaction(["bills", "pendingSync"], "readwrite");
+            tx.objectStore("bills").delete(id);
+            tx.objectStore("pendingSync").delete(id);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+          } catch(e) { resolve(false); }
         });
       },
       async getPending() {
         const db = await this.init();
+        if (!db) return [];
         return new Promise((resolve) => {
-          const tx = db.transaction("pendingSync", "readonly");
-          const req = tx.objectStore("pendingSync").getAll();
-          req.onsuccess = () => resolve(req.result || []);
-          req.onerror = () => resolve([]);
+          try {
+            const tx = db.transaction("pendingSync", "readonly");
+            const req = tx.objectStore("pendingSync").getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => resolve([]);
+          } catch(e) { resolve([]); }
         });
       },
       async getAllBills() {
         const db = await this.init();
+        if (!db) return [];
         return new Promise((resolve) => {
-          const tx = db.transaction("bills", "readonly");
-          const req = tx.objectStore("bills").getAll();
-          req.onsuccess = () => resolve(req.result || []);
-          req.onerror = () => resolve([]);
+          try {
+            const tx = db.transaction("bills", "readonly");
+            const req = tx.objectStore("bills").getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => resolve([]);
+          } catch(e) { resolve([]); }
         });
       },
       async cacheProducts(products) {
         if (!Array.isArray(products) || products.length === 0) return;
         const db = await this.init();
-        const tx = db.transaction("products", "readwrite");
-        const store = tx.objectStore("products");
-        products.forEach(p => { if (p && p.name) store.put(p); });
+        if (!db) return;
+        try {
+          const tx = db.transaction("products", "readwrite");
+          const store = tx.objectStore("products");
+          products.forEach(p => { if (p && p.name) store.put(p); });
+        } catch(e) {}
       },
       async removeProduct(name) {
         const db = await this.init();
-        const tx = db.transaction("products", "readwrite");
-        tx.objectStore("products").delete(name);
+        if (!db) return;
+        try {
+          const tx = db.transaction("products", "readwrite");
+          tx.objectStore("products").delete(name);
+        } catch(e) {}
       },
       async getProducts() {
         const db = await this.init();
+        if (!db) return [];
         return new Promise((resolve) => {
-          const tx = db.transaction("products", "readonly");
-          const req = tx.objectStore("products").getAll();
-          req.onsuccess = () => resolve(req.result || []);
-          req.onerror = () => resolve([]);
+          try {
+            const tx = db.transaction("products", "readonly");
+            const req = tx.objectStore("products").getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => resolve([]);
+          } catch(e) { resolve([]); }
         });
       },
       async cacheCustomers(customers) {
         if (!Array.isArray(customers) || customers.length === 0) return;
         const db = await this.init();
-        const tx = db.transaction("customers", "readwrite");
-        const store = tx.objectStore("customers");
-        customers.forEach(c => { if (c && c.name) store.put(c); });
+        if (!db) return;
+        try {
+          const tx = db.transaction("customers", "readwrite");
+          const store = tx.objectStore("customers");
+          customers.forEach(c => { if (c && c.name) store.put(c); });
+        } catch(e) {}
       },
       async getCustomers() {
         const db = await this.init();
+        if (!db) return [];
         return new Promise((resolve) => {
-          const tx = db.transaction("customers", "readonly");
-          const req = tx.objectStore("customers").getAll();
-          req.onsuccess = () => resolve(req.result || []);
-          req.onerror = () => resolve([]);
+          try {
+            const tx = db.transaction("customers", "readonly");
+            const req = tx.objectStore("customers").getAll();
+            req.onsuccess = () => resolve(req.result || []);
+            req.onerror = () => resolve([]);
+          } catch(e) { resolve([]); }
         });
       }
     };
@@ -483,7 +548,7 @@
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
       const [lastBilledInfo, setLastBilledInfo] = useState(null);
 
-      // 9. Report Date Range States (DECLARED BEFORE HOOKS/MEMOS!)
+      // 9. Report Date Range States
       const [reportPreset, setReportPreset] = useState("2days");
       const [reportStartDate, setReportStartDate] = useState(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
       const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -1419,7 +1484,7 @@
               </div>
             )}
 
-            {/* ARCHIVE & LEDGER TAB WITH CUSTOM RANGE & HIGH CONTRAST WALK-IN TOGGLE */}
+            {/* NEW PASSWORD-PROTECTED TAB: ARCHIVE & LEDGER */}
             {currentTab === "archive" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 {!isArchiveUnlocked ? (
@@ -1746,7 +1811,11 @@
     }
 
     const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
+    root.render(
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    );
   </script>
 </body>
 </html>
