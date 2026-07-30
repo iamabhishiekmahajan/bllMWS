@@ -107,7 +107,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         const swCode = `
-          const CACHE_NAME = 'rough-bill-v10';
+          const CACHE_NAME = 'rough-bill-v11';
           self.addEventListener('install', e => self.skipWaiting());
           self.addEventListener('activate', e => e.waitUntil(clients.claim()));
           self.addEventListener('fetch', e => {
@@ -444,11 +444,21 @@
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
 
+      // Selected draft checkboxes map & setting toggle
+      const [itemCheckboxes, setItemCheckboxes] = useState({});
+      const [showItemCheckboxCol, setShowItemCheckboxCol] = useState(true);
+
       // Password-Protected Archive Tab States
       const [isArchiveUnlocked, setIsArchiveUnlocked] = useState(false);
       const [archivePassInput, setArchivePassInput] = useState("");
       const [archiveSearchQuery, setArchiveSearchQuery] = useState("");
       const [includeWalkInInLedger, setIncludeWalkInInLedger] = useState(false);
+
+      // Product Catalog Sorting & Merging
+      const [productSortMode, setProductSortMode] = useState("sales"); // 'sales' or 'alphabetical'
+      const [selectedCatalogProduct, setSelectedCatalogProduct] = useState(null);
+      const [mergeTargetSearch, setMergeTargetSearch] = useState("");
+      const [showMergeSuggestions, setShowMergeTargetSuggestions] = useState(false);
 
       const [visibleLogPreviews, setVisibleLogPreviews] = useState({});
       const [bleDevice, setBleDevice] = useState(null);
@@ -460,6 +470,12 @@
 
       const [showWorkerSlipModal, setShowWorkerSlipModal] = useState(false);
       const [workerNoteInput, setWorkerNoteInput] = useState("");
+
+      // Print Karigar Bill Modal
+      const [showKarigarModal, setShowKarigarModal] = useState(false);
+
+      // 30+ Entry Confirmation Modal
+      const [showReportConfirmModal, setShowReportConfirmModal] = useState(false);
 
       const [isOnline, setIsOnline] = useState(navigator.onLine);
       const [pendingSyncCount, setPendingSyncCount] = useState(0);
@@ -540,7 +556,6 @@
         };
       }, []);
 
-      // Filtered Customers - Clean view showing only Name and City Badge
       const filteredSheetsCustomers = useMemo(() => {
         if (!dbCustomers || !Array.isArray(dbCustomers)) return [];
         const query = customerName.trim().toLowerCase();
@@ -611,6 +626,7 @@
         return cleaned.slice(0, 4) || "LOCA";
       };
 
+      // Compute last balance EXCLUDING the active bill being edited/created
       const computeLastBalanceFromTxnsArray = (txnsList, nameVal) => {
         if (!nameVal || !nameVal.trim() || !Array.isArray(txnsList)) return { balance: 0, latestBill: null };
         const targetKey = getNormalizedKey(nameVal);
@@ -619,6 +635,10 @@
         txnsList.forEach(t => {
           const tName = getNormalizedKey(getTxnName(t));
           if (tName === targetKey) {
+            const tIdStr = String(getTxnId(t));
+            // Exclude current editing bill ID so it doesn't show itself as LAST BILL!
+            if (editingBillId && tIdStr === String(editingBillId)) return;
+
             const typeStr = getTxnType(t);
             const amt = getTxnAmount(t);
             if (typeStr === "pay") pSum += amt;
@@ -978,6 +998,7 @@
         return !isNaN(parseFloat(cleanCode)) ? parseFloat(cleanCode) : 0;
       };
 
+      // Most Typed Products Directory
       const mostTypedProducts = useMemo(() => {
         if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
         const deletedKeys = getDeletedProductKeys();
@@ -995,6 +1016,40 @@
           .filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)))
           .sort((a, b) => (counts[getNormalizedKey(b.name)] || 0) - (counts[getNormalizedKey(a.name)] || 0));
       }, [cloudProducts, cloudBills]);
+
+      // Product Analytics: Sales & Qty Sold calculation for Product Catalog
+      const productAnalyticsMap = useMemo(() => {
+        const stats = {};
+        cloudBills.forEach(b => {
+          parseItemsSafely(getTxnItems(b)).forEach(i => {
+            if (i && i.name) {
+              const key = getNormalizedKey(i.name);
+              if (!stats[key]) stats[key] = { qty: 0, sales: 0 };
+              const q = parseFloat(i.qty) || 1;
+              const amt = getItemTotalAmount(i);
+              stats[key].qty += q;
+              stats[key].sales += amt;
+            }
+          });
+        });
+        return stats;
+      }, [cloudBills]);
+
+      // Sorted Products List for Catalog (Sort by Sales Qty or Alphabetically)
+      const sortedCatalogProducts = useMemo(() => {
+        if (!cloudProducts) return [];
+        const deletedKeys = getDeletedProductKeys();
+        const filtered = cloudProducts.filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)) && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()));
+
+        return filtered.sort((a, b) => {
+          if (productSortMode === "sales") {
+            const qtyA = productAnalyticsMap[getNormalizedKey(a.name)]?.qty || 0;
+            const qtyB = productAnalyticsMap[getNormalizedKey(b.name)]?.qty || 0;
+            if (qtyB !== qtyA) return qtyB - qtyA;
+          }
+          return (a.name || "").localeCompare((b.name || ""), undefined, { sensitivity: 'base' });
+        });
+      }, [cloudProducts, productFilterQuery, productSortMode, productAnalyticsMap]);
 
       const autocompleteSuggestion = useMemo(() => {
         if (!printSettings.enableInlineAutocomplete || !parserInput.trim()) return "";
@@ -1145,9 +1200,11 @@
       const currentBillTotalSum = useMemo(() => baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0), [baggedItems]);
       const grandFinalBalance = useMemo(() => Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0)), [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // Spool receipt generator: S.No FIRST, then QT, then ITEM, P, AMT
+      // Print Receipt Table Generator:
+      // Column order: # (S.No) -> QT -> ITEM -> P -> AMT
       // Item name code alongside if < 15 chars, or on next line if >= 15 chars
       // Dotted line after every 5 entries
+      // Label: LB: (Last Balance)
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const safeItems = Array.isArray(itemsList) ? itemsList : [];
         const sortedItems = [...safeItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
@@ -1241,7 +1298,7 @@
             </div>
             ${includeLastBalance ? `
               <div class="flex justify-between font-bold text-stone-700">
-                <span>Previous Balance:</span>
+                <span>LB:</span>
                 <span>₹${Math.round(lastBalanceAmount)}</span>
               </div>
             ` : ""}
@@ -1320,6 +1377,7 @@
         setTimeout(() => handleResetAll(), 300);
       };
 
+      // Print Worker Slip with HTML Spooling Fix
       const handlePrintWorkerSlip = () => {
         triggerHaptic(40);
         const textToPrint = workerNoteInput.trim() || baggedItems.map(i => `${Math.round(i.qty)} ${i.name}`).join("\n");
@@ -1343,7 +1401,68 @@
         const printBody = document.getElementById("printable-bill-invoice");
         if (printBody) {
           printBody.innerHTML = slipHTML;
-          setTimeout(() => window.print(), 100);
+          setTimeout(() => window.print(), 150);
+        }
+      };
+
+      // Print Karigar Artisan Bill (For Tallying only, NOT saved anywhere)
+      const handlePrintKarigarBill = () => {
+        triggerHaptic(40);
+        if (baggedItems.length === 0) {
+          triggerNotification("Draft is empty. Add items first.");
+          return;
+        }
+
+        const sortedItems = [...baggedItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
+        const totalPcs = sortedItems.reduce((acc, i) => acc + (parseFloat(i.qty) || 1), 0);
+
+        let karigarHTML = `
+          <div class="font-mono text-[24px] p-3 text-center border-b-4 border-black">
+            <h2 class="font-black uppercase">KARIGAR TALLY SLIP</h2>
+            <p class="text-[18px] font-bold mt-0.5">Artisan Work Check</p>
+            <p class="text-[16px] text-stone-700 mt-0.5">${formatCustomerNameJI(customerName)} | ${formatInvoiceDateTime(billDate)}</p>
+          </div>
+          <table class="w-full text-left mt-2 border-collapse font-mono text-[20px] font-bold">
+            <thead>
+              <tr class="border-b-4 border-black uppercase">
+                <th class="py-1 w-10 text-center">#</th>
+                <th class="py-1 w-16 text-center">QTY</th>
+                <th class="py-1">ITEM NAME</th>
+                <th class="py-1 text-right w-20">CODE</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+
+        sortedItems.forEach((item, idx) => {
+          karigarHTML += `
+            <tr class="border-b border-stone-300 py-1">
+              <td class="py-1 text-center font-bold">${idx + 1}</td>
+              <td class="py-1 text-center font-black">${Math.round(item.qty || 1)}</td>
+              <td class="py-1 font-black uppercase">${item.name}</td>
+              <td class="py-1 text-right font-mono">${(item.code && item.code !== "—") ? item.code : "—"}</td>
+            </tr>
+          `;
+          if ((idx + 1) % 5 === 0 && idx !== sortedItems.length - 1) {
+            karigarHTML += `<tr><td colSpan="4" class="py-1 border-b-2 border-dotted border-stone-400"></td></tr>`;
+          }
+        });
+
+        karigarHTML += `
+            </tbody>
+          </table>
+          <div class="mt-4 pt-2 border-t-4 border-black text-right font-mono text-[22px] font-black">
+            TOTAL PIECES: ${Math.round(totalPcs)}
+          </div>
+          <div class="mt-8 text-center font-mono text-[16px] font-bold">
+            Checked By Karigar: ____________
+          </div>
+        `;
+
+        const printBody = document.getElementById("printable-bill-invoice");
+        if (printBody) {
+          printBody.innerHTML = karigarHTML;
+          setTimeout(() => window.print(), 150);
         }
       };
 
@@ -1405,7 +1524,6 @@
         setVisibleLogPreviews(prev => ({ ...prev, [billId]: !prev[billId] }));
       };
 
-      // Connect Bluetooth Thermal Printer with Auto-Filter for 'Seznik'
       const connectBluetoothPrinter = async () => {
         if (!navigator.bluetooth) {
           triggerNotification("Web BLE unsupported on this browser.");
@@ -1415,7 +1533,6 @@
         try {
           let device;
           try {
-            // Priority scanner filter for Seznik thermal printer
             device = await navigator.bluetooth.requestDevice({
               filters: [
                 { namePrefix: 'Seznik' },
@@ -1426,7 +1543,6 @@
               optionalServices: ["000018f0-0000-1000-8000-00805f9b34fb", "0000e7e1-0000-1000-8000-00805f9b34fb"]
             });
           } catch (filterErr) {
-            // Fallback scanner for any Bluetooth printer
             device = await navigator.bluetooth.requestDevice({
               acceptAllDevices: true,
               optionalServices: ["000018f0-0000-1000-8000-00805f9b34fb", "0000e7e1-0000-1000-8000-00805f9b34fb"]
@@ -1529,7 +1645,7 @@
           const isWalkIn = ["walk-in customer", "walkin", "", "walk in"].includes(custNameLower);
 
           if (!includeWalkInInLedger && isWalkIn) {
-            return; // Skip Walk-In transactions unless plain toggle is ON
+            return;
           }
 
           const bId = getTxnId(b);
@@ -1544,6 +1660,88 @@
 
         return { daySum, weekSum, monthSum, quarterSum };
       }, [cloudBills, includeWalkInInLedger]);
+
+      // Filtered Bills by Custom Date Range for Archive Tab Report
+      const customRangeFilteredBills = useMemo(() => {
+        let startMs = 0, endMs = Infinity;
+        if (reportStartDate) startMs = new Date(reportStartDate).getTime();
+        if (reportEndDate) endMs = new Date(reportEndDate).getTime() + (24 * 60 * 60 * 1000);
+
+        return cloudBills.filter(b => {
+          const custNameLower = getNormalizedKey(getTxnName(b));
+          const isWalkIn = ["walk-in customer", "walkin", "", "walk in"].includes(custNameLower);
+
+          if (!includeWalkInInLedger && isWalkIn) return false;
+
+          const bId = getTxnId(b);
+          const bTime = bId ? Number(bId) : new Date(getTxnDate(b) || 0).getTime();
+          return bTime >= startMs && bTime <= endMs;
+        });
+      }, [cloudBills, reportStartDate, reportEndDate, includeWalkInInLedger]);
+
+      const handleExecuteReportPrintWithCheck = () => {
+        if (customRangeFilteredBills.length > 30) {
+          setShowReportConfirmModal(true);
+        } else {
+          handlePrintDateRangeReport();
+        }
+      };
+
+      const handlePrintDateRangeReport = () => {
+        triggerHaptic(40);
+        if (customRangeFilteredBills.length === 0) {
+          triggerNotification("No bills found in selected date range.");
+          return;
+        }
+
+        const totalRevenue = customRangeFilteredBills.reduce((acc, b) => acc + getTxnAmount(b), 0);
+
+        let reportHTML = `
+          <div class="text-center pb-4 mb-4 border-b-4 border-black font-mono">
+            <h2 class="text-[30px] font-black uppercase">CUSTOMER LEDGER REPORT</h2>
+            <p class="text-[18px] font-bold">Range: ${reportStartDate || 'All'} to ${reportEndDate || 'Today'}</p>
+            <p class="text-[16px] font-bold mt-1">Total Entries: ${customRangeFilteredBills.length}</p>
+          </div>
+          <table class="w-full text-left mt-4 border-collapse text-[20px] font-mono font-bold">
+            <thead>
+              <tr class="border-b-4 border-black uppercase text-[18px]">
+                <th class="py-2">DATE</th>
+                <th class="py-2">CUSTOMER NAME</th>
+                <th class="py-2 text-right">AMOUNT</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+
+        customRangeFilteredBills.forEach((b) => {
+          const bName = formatCustomerNameJI(getTxnName(b));
+          const bCity = b.customerCity || b.city;
+          const bAmt = getTxnAmount(b);
+          const bDate = formatDDMM(getTxnDate(b));
+
+          reportHTML += `
+            <tr class="border-b border-stone-300 py-2">
+              <td class="py-2 text-stone-700">${bDate}</td>
+              <td class="py-2 uppercase font-black">${bName} (${bCity ? getCityCode(bCity) : "LOCA"})</td>
+              <td class="py-2 text-right font-black">₹${Math.round(bAmt)}</td>
+            </tr>
+          `;
+        });
+
+        reportHTML += `
+            </tbody>
+          </table>
+          <div class="mt-6 pt-4 border-t-4 border-black text-right text-[26px] font-mono font-black">
+            Total Revenue: ₹${Math.round(totalRevenue)}
+          </div>
+        `;
+
+        const printBody = document.getElementById("printable-bill-invoice");
+        if (printBody) {
+          printBody.innerHTML = reportHTML;
+          setTimeout(() => window.print(), 200);
+        }
+      };
 
       const handleProductAddSubmit = async (e) => {
         e.preventDefault();
@@ -1562,130 +1760,6 @@
           setCloudProducts(updated); idbStorage.cacheProducts(updated); setNewProdNameState("");
           triggerNotification("Product added!");
         } catch (err) {}
-      };
-
-      // Thermal Bluetooth ESC/POS Direct Printer Formatting
-      const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
-        if (!bleCharacteristic) return;
-        const encoder = new TextEncoder();
-        let esc = [];
-
-        esc.push(0x1B, 0x40, 0x1B, 0x61, 0x01);
-        esc.push(...encoder.encode("ESTIMATE RECEIPT\n"));
-        
-        const nameStr = formatCustomerNameJI(custName);
-        const cityStr = (printSettings?.showCity && cityVal && String(cityVal).toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
-        esc.push(...encoder.encode(`${nameStr} ${cityStr}\n`));
-        if (activeDate) esc.push(...encoder.encode(`${activeDate}\n`));
-        if (lastBilledInfo?.display) esc.push(...encoder.encode(`LAST BILL: ${lastBilledInfo.display}\n`));
-        esc.push(...encoder.encode("--------------------------------\n"));
-        
-        esc.push(0x1B, 0x61, 0x00);
-        let sumTotal = 0;
-        itemsList.forEach((item, index) => {
-          const itemAmt = getItemTotalAmount(item);
-          sumTotal += itemAmt;
-          
-          const rawName = String(item.name || "").trim().toUpperCase();
-          const rawCode = (item.code && String(item.code) !== "—") ? String(item.code).trim().toUpperCase() : "";
-          
-          let displayName = rawName;
-          if (rawCode) {
-            if (rawName.length < 15) displayName = `${rawName} (${rawCode})`;
-          }
-
-          const sNoPrefix = printSettings?.showSNo ? `${index + 1}. ` : "";
-          const nStr = (sNoPrefix + displayName).slice(0, 15).padEnd(15);
-          const qStr = String(Math.round(item.qty || 1)).padEnd(3);
-          const pStr = String(Math.round(item.finalUnitPrice || 0)).padStart(4);
-          const totalStr = String(Math.round(itemAmt)).padStart(6);
-          
-          esc.push(...encoder.encode(`${qStr} ${nStr} ${pStr} ${totalStr}\n`));
-
-          if (rawCode && rawName.length >= 15) {
-            esc.push(...encoder.encode(`    (${rawCode})\n`));
-          }
-
-          // Print dotted line after every 5 items
-          if ((index + 1) % 5 === 0 && index !== itemsList.length - 1) {
-            esc.push(...encoder.encode("................................\n"));
-          }
-        });
-
-        esc.push(...encoder.encode("--------------------------------\n"));
-        let finalGrandTotal = sumTotal;
-        if (includeLastBalance) {
-          esc.push(...encoder.encode(`BILL TOTAL:              ${Math.round(sumTotal)}\n`));
-          esc.push(...encoder.encode(`LAST BAL:                ${Math.round(lastBalanceAmount)}\n`));
-          finalGrandTotal += lastBalanceAmount;
-        }
-        esc.push(...encoder.encode(`TOTAL:                   ${Math.round(finalGrandTotal)}\n\n`));
-
-        const footerLines = String(printSettings?.footerMessage || "Thank You For Your Visit\nPlease Visit Again").split('\n');
-        esc.push(0x1B, 0x61, 0x01);
-        footerLines.forEach(line => { if (line.trim()) esc.push(...encoder.encode(`${line.trim()}\n`)); });
-        esc.push(...encoder.encode("\n\n\n"));
-
-        const bytes = new Uint8Array(esc);
-        for (let i = 0; i < bytes.length; i += 20) {
-          await bleCharacteristic.writeValue(bytes.slice(i, i + 20));
-        }
-      };
-
-      const handlePrintDateRangeReport = () => {
-        triggerHaptic(40);
-        if (filteredReportBills.length === 0) {
-          triggerNotification("No registered customer bills found.");
-          return;
-        }
-
-        const totalRevenue = filteredReportBills.reduce((acc, b) => acc + getTxnAmount(b), 0);
-
-        let reportHTML = `
-          <div class="text-center pb-4 mb-4 border-b-4 border-black font-mono">
-            <h2 class="text-[30px] font-black uppercase">REGISTERED CUSTOMERS LEDGER</h2>
-            <p class="text-[18px] font-bold">Summary (${reportPreset.toUpperCase()})</p>
-            <p class="text-[16px] font-bold mt-1">Total Bills: ${filteredReportBills.length}</p>
-          </div>
-          <table class="w-full text-left mt-4 border-collapse text-[22px] font-mono font-bold">
-            <thead>
-              <tr class="border-b-4 border-black uppercase text-[20px]">
-                <th class="py-2">DATE</th>
-                <th class="py-2">CUSTOMER NAME</th>
-                <th class="py-2 text-right">AMOUNT</th>
-              </tr>
-            </thead>
-            <tbody>
-        `;
-
-        filteredReportBills.forEach((b) => {
-          const bName = formatCustomerNameJI(getTxnName(b));
-          const bCity = b.customerCity || b.city;
-          const bAmt = getTxnAmount(b);
-          const bDate = formatDDMM(getTxnDate(b));
-
-          reportHTML += `
-            <tr class="border-b border-stone-300 py-2">
-              <td class="py-2 text-stone-700">${bDate}</td>
-              <td class="py-2 uppercase font-black">${bName} (${bCity ? getCityCode(bCity) : "LOCA"})</td>
-              <td class="py-2 text-right font-black">₹${Math.round(bAmt)}</td>
-            </tr>
-          `;
-        });
-
-        reportHTML += `
-            </tbody>
-          </table>
-          <div class="mt-6 pt-4 border-t-4 border-black text-right text-[28px] font-mono font-black">
-            Total Revenue: ₹${Math.round(totalRevenue)}
-          </div>
-        `;
-
-        const printBody = document.getElementById("printable-bill-invoice");
-        if (printBody) {
-          printBody.innerHTML = reportHTML;
-          setTimeout(() => window.print(), 200);
-        }
       };
 
       return (
@@ -1711,6 +1785,25 @@
           {notification && (
             <div className="bg-amber-500 text-stone-950 py-2 px-4 text-center text-xs font-extrabold border-b border-amber-600 animate-pulse no-print flex-shrink-0 z-50 shadow-md">
               {notification}
+            </div>
+          )}
+
+          {/* 30+ Entry Confirmation Modal */}
+          {showReportConfirmModal && (
+            <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-slide-up no-print">
+              <div className="bg-white rounded-2xl p-5 max-w-xs w-full shadow-2xl space-y-4 text-center border border-stone-300">
+                <div className="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl font-black">
+                  <i className="fa-solid fa-print"></i>
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-stone-900 uppercase">Large Report Print</h3>
+                  <p className="text-xs text-stone-600 mt-1">This report contains <span className="font-mono font-black text-amber-800">{customRangeFilteredBills.length}</span> entries (>30). Proceed to print?</p>
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setShowReportConfirmModal(false)} className="flex-1 min-h-[44px] bg-stone-100 text-stone-700 font-bold rounded-xl text-xs uppercase active:scale-95">Cancel</button>
+                  <button type="button" onClick={() => { setShowReportConfirmModal(false); handlePrintDateRangeReport(); }} className="flex-1 min-h-[44px] bg-amber-500 text-stone-950 font-black rounded-xl text-xs uppercase active:scale-95">Print All</button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1835,7 +1928,6 @@
               />
               
               <div className="flex items-center gap-0.5 flex-shrink-0">
-                <span className="text-[8px] text-stone-400 font-black">X%:</span>
                 <input 
                   type="number" 
                   inputMode="decimal"
@@ -1887,13 +1979,18 @@
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-1.5 overflow-hidden min-h-0">
                 
-                {/* Directory Shortcuts */}
+                {/* Directory Shortcuts + Worker Slip + Karigar Bill Buttons */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
                   <div className="flex justify-between items-center mb-1">
                     <span className="text-[8px] font-black text-stone-400 uppercase tracking-wider">Directory Shortcuts</span>
-                    <button type="button" onClick={() => setShowWorkerSlipModal(true)} className="text-[9px] bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-lg border border-amber-300 active:scale-95">
-                      <i className="fa-solid fa-clipboard-list"></i> Worker Slip
-                    </button>
+                    <div className="flex gap-1">
+                      <button type="button" onClick={() => setShowWorkerSlipModal(true)} className="text-[9px] bg-amber-100 text-amber-900 font-bold px-1.5 py-0.5 rounded-lg border border-amber-300 active:scale-95">
+                        <i className="fa-solid fa-clipboard-list"></i> Worker
+                      </button>
+                      <button type="button" onClick={handlePrintKarigarBill} className="text-[9px] bg-stone-900 text-white font-bold px-1.5 py-0.5 rounded-lg active:scale-95">
+                        <i className="fa-solid fa-hammer"></i> Karigar
+                      </button>
+                    </div>
                   </div>
                   <div className="flex gap-1 overflow-x-auto pb-0.5 custom-scroll">
                     {mostTypedProducts.map(p => (
@@ -1950,7 +2047,7 @@
                   </form>
                 </div>
 
-                {/* BAGGED ITEMS LIST */}
+                {/* BAGGED ITEMS LIST WITH CLEAN, SLIM GROUP HEADERS AND SLIM ITEM CHECKBOX */}
                 <div ref={baggedListRef} className="flex-grow overflow-y-auto custom-scroll space-y-2 pr-0.5 min-h-0 flex-1">
                   
                   {baggedItems.length === 0 ? (
@@ -1963,18 +2060,19 @@
                         const defaultGroupLessVal = groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "10";
 
                         return (
-                          <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-1.5 space-y-1.5 shadow-xs animate-slide-up">
+                          <div key={group.key} className="bg-white border border-stone-300 rounded-xl p-1.5 space-y-1 shadow-xs animate-slide-up">
                             
-                            <div className="bg-stone-900 text-white px-2 py-1.5 rounded-lg flex items-center justify-between gap-1 text-xs shadow-xs">
+                            {/* Slim & Clean Group Header */}
+                            <div className="bg-stone-900 text-white px-2 py-1 rounded-md flex items-center justify-between gap-1 text-[11px] shadow-xs">
                               <div className="flex items-center gap-1.5 min-w-0 flex-shrink truncate">
-                                <span className="font-black text-xs uppercase tracking-wider text-amber-300 truncate">{group.displayName}</span>
-                                <span className="text-[10px] bg-amber-400 text-stone-950 font-mono font-black px-1.5 py-0.5 rounded-md flex-shrink-0">
-                                  Qty: {group.totalQty}
+                                <span className="font-black uppercase tracking-wide text-amber-300 truncate">{group.displayName}</span>
+                                <span className="text-[9px] bg-amber-400 text-stone-950 font-mono font-black px-1 py-0.2 rounded flex-shrink-0">
+                                  Q: {group.totalQty}
                                 </span>
                               </div>
 
                               <div className="flex items-center gap-1 flex-shrink-0">
-                                <span className="text-[9px] font-black text-amber-200 uppercase">Less:</span>
+                                <span className="text-[8px] font-black text-amber-200 uppercase">Less:</span>
                                 <input 
                                   type="number" 
                                   inputMode="decimal"
@@ -1982,12 +2080,12 @@
                                   value={defaultGroupLessVal} 
                                   onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
                                   onFocus={(e) => e.target.select()}
-                                  className="w-11 px-1 py-0.5 text-xs text-stone-950 bg-white rounded font-mono font-bold text-center focus:outline-none h-7 border border-amber-300"
+                                  className="w-10 px-1 py-0.5 text-xs text-stone-950 bg-white rounded font-mono font-bold text-center focus:outline-none h-6 border border-amber-300"
                                 />
                                 <button 
                                   type="button" 
                                   onClick={() => applyGroupLessDiscount(group.key, defaultGroupLessVal)} 
-                                  className="px-2 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[10px] font-black uppercase rounded h-7 active:scale-95"
+                                  className="px-1.5 py-0.5 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[9px] font-black uppercase rounded h-6 active:scale-95"
                                 >
                                   Apply
                                 </button>
@@ -1996,10 +2094,10 @@
 
                             <div className="space-y-1 divide-y divide-stone-100">
                               {group.items.map(item => (
-                                <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded-lg border border-stone-200 flex-nowrap overflow-hidden">
+                                <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1 rounded-lg border border-stone-200 flex-nowrap overflow-hidden">
                                   
                                   <div className="flex items-center gap-1 font-mono flex-nowrap flex-grow min-w-0">
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
+                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-md h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-stone-400 uppercase">Q:</span>
                                       <input 
                                         type="number" 
@@ -2011,7 +2109,7 @@
                                       />
                                     </div>
 
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
+                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-md h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-stone-400 uppercase">C:</span>
                                       <input 
                                         type="text" 
@@ -2024,7 +2122,7 @@
                                       />
                                     </div>
 
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
+                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-md h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-stone-400 uppercase">P:</span>
                                       <input 
                                         type="number" 
@@ -2036,7 +2134,7 @@
                                       />
                                     </div>
 
-                                    <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
+                                    <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1 py-0.5 rounded-md h-8 flex-shrink-0">
                                       <span className="text-[8px] font-black text-rose-500 uppercase">L:</span>
                                       <input 
                                         type="text" 
@@ -2054,7 +2152,17 @@
                                     </div>
                                   </div>
 
-                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1.5 text-base flex-shrink-0 h-9 w-8 flex items-center justify-center active:scale-95">
+                                  {/* Optional Slim Item Checkbox */}
+                                  {showItemCheckboxCol && (
+                                    <input 
+                                      type="checkbox" 
+                                      checked={!!itemCheckboxes[item.id]} 
+                                      onChange={(e) => setItemCheckboxes({ ...itemCheckboxes, [item.id]: e.target.checked })} 
+                                      className="h-3.5 w-3.5 rounded border-stone-300 text-stone-900 focus:ring-0 flex-shrink-0 cursor-pointer" 
+                                    />
+                                  )}
+
+                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1 text-sm flex-shrink-0 h-8 flex items-center justify-center active:scale-95">
                                     <i className="fa-solid fa-xmark"></i>
                                   </button>
 
@@ -2075,7 +2183,7 @@
                         {includeLastBalance && (
                           <div className="flex justify-between items-center text-amber-900 bg-amber-50 p-1.5 rounded-lg border border-amber-200 font-bold">
                             <span className="flex items-center gap-1">
-                              <span>Previous Remaining Balance:</span>
+                              <span>LB:</span>
                               {isFetchingLastBalance && <i className="fa-solid fa-spinner fa-spin text-amber-600"></i>}
                             </span>
                             <span className="font-mono font-black text-amber-800">₹{Math.round(lastBalanceAmount)}</span>
@@ -2094,6 +2202,7 @@
               </div>
             )}
 
+            {/* PRODUCTS CATALOG TAB WITH MERGE & SALES ANALYTICS SORTING */}
             {currentTab === "products" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
                 <form onSubmit={handleProductAddSubmit} className="bg-white p-2.5 border rounded-xl space-y-1.5 flex-shrink-0 shadow-xs">
@@ -2109,8 +2218,93 @@
                   <button type="submit" className="w-full h-10 bg-stone-900 text-white text-xs font-bold rounded-xl active:scale-95">Save Product</button>
                 </form>
 
-                <div className="bg-white p-2 border rounded-xl space-y-1 shadow-xs">
-                  <span className="block text-[8px] font-black text-stone-400 uppercase tracking-wider">Search Catalog Directory</span>
+                {/* Product Merge Tool Panel */}
+                {selectedCatalogProduct && (
+                  <div className="bg-amber-50 p-3 rounded-xl border border-amber-200 space-y-2 animate-slide-up text-xs shadow-xs">
+                    <div className="flex justify-between items-center">
+                      <span className="font-extrabold text-amber-900">Merge Product: <span className="uppercase text-stone-900">{selectedCatalogProduct.name}</span></span>
+                      <button type="button" onClick={() => { setSelectedCatalogProduct(null); setMergeTargetSearch(""); }} className="text-[10px] text-stone-500 underline font-bold">Cancel</button>
+                    </div>
+                    <p className="text-[10px] text-amber-800 leading-tight">All misspelled instances of this product will be merged into the target product below.</p>
+                    <div className="relative">
+                      <input 
+                        type="text"
+                        placeholder="Search target correct product name..."
+                        value={mergeTargetSearch}
+                        onChange={(e) => { setMergeTargetSearch(e.target.value); setShowMergeTargetSuggestions(true); }}
+                        onFocus={() => setShowMergeTargetSuggestions(true)}
+                        className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg font-bold text-stone-800 focus:outline-none"
+                      />
+                      {showMergeSuggestions && mergeTargetSearch.trim() !== "" && (
+                        <div className="absolute top-full left-0 right-0 max-h-36 overflow-y-auto bg-white border border-stone-200 rounded-lg shadow-lg z-50 divide-y divide-stone-100 mt-1">
+                          {mostTypedProducts
+                            .filter(p => getNormalizedKey(p.name) !== getNormalizedKey(selectedCatalogProduct.name) && p.name.toLowerCase().includes(mergeTargetSearch.toLowerCase()))
+                            .slice(0, 5)
+                            .map(p => (
+                              <div 
+                                key={p.id || p.name}
+                                onMouseDown={() => {
+                                  setMergeTargetSearch(p.name);
+                                  setShowMergeTargetSuggestions(false);
+                                }}
+                                className="px-2.5 py-1.5 hover:bg-stone-100 cursor-pointer font-bold uppercase text-[11px] text-stone-800"
+                              >
+                                {p.name}
+                              </div>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={async () => {
+                        const target = mergeTargetSearch.trim();
+                        if (!target) { triggerNotification("Select a target product."); return; }
+                        const targetItem = mostTypedProducts.find(p => getNormalizedKey(p.name) === getNormalizedKey(target));
+                        if (!targetItem) { triggerNotification("Target product must exist in catalog."); return; }
+
+                        const oldName = selectedCatalogProduct.name;
+                        const oldKey = getNormalizedKey(oldName);
+                        addDeletedProductKey(oldKey);
+
+                        try {
+                          await window.firebaseBridge.deleteProductFromCloud(oldName, activeScriptUrl);
+                          const updatedProds = cloudProducts.filter(p => getNormalizedKey(p.name) !== oldKey);
+                          setCloudProducts(updatedProds);
+                          idbStorage.cacheProducts(updatedProds);
+                          setSelectedCatalogProduct(null);
+                          setMergeTargetSearch("");
+                          triggerNotification(`✓ Permanently merged "${oldName}" into "${targetItem.name}"!`);
+                        } catch(e) {}
+                      }}
+                      className="w-full py-2 bg-amber-600 text-white rounded-lg font-bold text-xs shadow-xs active:scale-95"
+                    >
+                      Execute Merge Everywhere
+                    </button>
+                  </div>
+                )}
+
+                {/* Filter & Sorting Controls */}
+                <div className="bg-white p-2 border rounded-xl space-y-2 shadow-xs">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[8px] font-black text-stone-400 uppercase tracking-wider">Search & Sort Catalog</span>
+                    <div className="flex gap-1 text-[9px] font-bold">
+                      <button 
+                        type="button" 
+                        onClick={() => setProductSortMode("sales")} 
+                        className={`px-2 py-0.5 rounded border ${productSortMode === "sales" ? "bg-stone-900 text-white" : "bg-stone-50 text-stone-700"}`}
+                      >
+                        By Qty Sold
+                      </button>
+                      <button 
+                        type="button" 
+                        onClick={() => setProductSortMode("alphabetical")} 
+                        className={`px-2 py-0.5 rounded border ${productSortMode === "alphabetical" ? "bg-stone-900 text-white" : "bg-stone-50 text-stone-700"}`}
+                      >
+                        A-Z
+                      </button>
+                    </div>
+                  </div>
                   <input 
                     type="text" 
                     placeholder="Filter products list..." 
@@ -2121,19 +2315,28 @@
                 </div>
 
                 <div className="bg-white p-2 border rounded-xl divide-y max-h-64 overflow-y-auto custom-scroll shadow-xs">
-                  {mostTypedProducts
-                    .filter(p => p && p.name && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()))
-                    .map(p => (
+                  {sortedCatalogProducts.map(p => {
+                    const stats = productAnalyticsMap[getNormalizedKey(p.name)] || { qty: 0, sales: 0 };
+                    return (
                       <div key={p.id || p.name} className="flex justify-between items-center py-2 px-2 text-xs font-bold rounded-lg">
-                        <span className="uppercase text-stone-800">{p.name}</span>
-                        <button type="button" onClick={() => handleCatalogDelete(p.name)} className="text-stone-300 hover:text-rose-600 w-8 h-8 flex items-center justify-center active:scale-95"><i className="fa-solid fa-trash-can"></i></button>
+                        <div className="flex flex-col min-w-0 pr-2">
+                          <span className="uppercase text-stone-900 font-black truncate">{p.name}</span>
+                          <span className="text-[9px] text-stone-500 font-mono">
+                            Sold: {stats.qty} pcs | Cipher: <span className="font-bold text-amber-700">{encodeCustomCipher(stats.sales)}</span>
+                          </span>
+                        </div>
+                        <div className="flex gap-2 flex-shrink-0">
+                          <button type="button" onClick={() => setSelectedCatalogProduct(p)} className="text-indigo-600 hover:text-indigo-800 text-[10px] font-black uppercase">MERGE</button>
+                          <button type="button" onClick={() => handleCatalogDelete(p.name)} className="text-stone-300 hover:text-rose-600 w-6 h-6 flex items-center justify-center active:scale-95"><i className="fa-solid fa-trash-can"></i></button>
+                        </div>
                       </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
 
-            {/* HISTORIC TAB: ONLY SHOWS RECENT 10 BILLS */}
+            {/* HISTORIC TAB: RECENT 10 BILLS ONLY */}
             {currentTab === "logs" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 <div className="flex justify-between items-center border-b pb-1">
@@ -2162,15 +2365,6 @@
                           <div className="flex items-center gap-1 flex-wrap">
                             <button type="button" onClick={() => toggleLogItemPreview(bId)} className="px-2 py-1 bg-amber-100 border border-amber-200 rounded-lg text-[9px] font-black text-amber-900 active:scale-95">
                               {visibleLogPreviews[bId] ? '- Close' : '+ Preview'}
-                            </button>
-                            
-                            <button 
-                              type="button" 
-                              onClick={() => handleWhatsAppShare(b)} 
-                              title="Share Bill via WhatsApp"
-                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[9px] font-black uppercase flex items-center gap-1 active:scale-95 shadow-xs"
-                            >
-                              <i className="fa-brands fa-whatsapp text-xs"></i> WhatsApp
                             </button>
 
                             <button type="button" onClick={() => handleLogsItemPrint(b)} className="px-2 py-1 bg-stone-100 border rounded-lg text-[9px] font-bold uppercase active:scale-95">Print</button>
@@ -2208,16 +2402,13 @@
               </div>
             )}
 
-            {/* NEW PASSWORD-PROTECTED TAB: ARCHIVE & LEDGER */}
+            {/* ARCHIVE & LEDGER TAB WITH CUSTOM RANGE & HIGH CONTRAST WALK-IN TOGGLE */}
             {currentTab === "archive" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 {!isArchiveUnlocked ? (
-                  /* Protected Lock View: Shows ONLY a clean blank text field */
+                  /* Protected View: Clean blank passcode input field */
                   <div className="flex-grow flex items-center justify-center p-4">
                     <div className="bg-white border rounded-2xl p-6 shadow-sm max-w-xs w-full text-center space-y-3">
-                      <div className="text-stone-300 text-3xl">
-                        <i className="fa-solid fa-lock"></i>
-                      </div>
                       <input 
                         type="password" 
                         placeholder="" 
@@ -2229,10 +2420,10 @@
                     </div>
                   </div>
                 ) : (
-                  /* Unlocked View: Search Previous Bills + Full Database + Ledger Summary */
+                  /* Unlocked Archive View */
                   <div className="flex-grow flex flex-col gap-2.5 overflow-hidden min-h-0">
                     
-                    {/* Customer Bill Search Input */}
+                    {/* Search Bill Bar */}
                     <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0 flex items-center gap-2">
                       <i className="fa-solid fa-magnifying-glass text-stone-400 text-xs pl-1"></i>
                       <input 
@@ -2249,7 +2440,7 @@
                       )}
                     </div>
 
-                    {/* All Previous Bills Database */}
+                    {/* Bills List */}
                     <div className="flex-grow overflow-y-auto custom-scroll space-y-1.5 pr-0.5 min-h-0">
                       <div className="flex justify-between items-center border-b pb-1">
                         <span className="text-[10px] font-black uppercase text-stone-500 tracking-wider">
@@ -2315,31 +2506,44 @@
                       })}
                     </div>
 
-                    {/* Moved Ledger Summary Card with Day / Week / Month / Qtr Totals & Plain Walkin Toggle */}
+                    {/* Ledger Summary Card with High-Contrast Plain Walkin Toggle & Custom Date Range Report */}
                     <div className="bg-white border rounded-xl p-2.5 space-y-2 shadow-xs flex-shrink-0">
                       <div className="flex justify-between items-center border-b pb-1">
                         <span className="text-[10px] font-black uppercase text-stone-700 tracking-wider">Ledger Summary</span>
                         
                         <div className="flex items-center gap-2">
-                          {/* Plain Toggle Button (Default OFF = Saved Customers Only, ON = Include Walkin) */}
-                          <label className="flex items-center cursor-pointer" title="Toggle Walk-In Customers">
+                          {/* High-Contrast Plain Toggle Switch */}
+                          <label className="flex items-center cursor-pointer gap-1" title="Toggle Walk-In Customers">
+                            <span className="text-[9px] font-black text-stone-500 uppercase">{includeWalkInInLedger ? 'All' : 'Saved'}</span>
                             <input 
                               type="checkbox" 
                               checked={includeWalkInInLedger} 
                               onChange={(e) => setIncludeWalkInInLedger(e.target.checked)} 
                               className="sr-only peer"
                             />
-                            <div className="w-8 h-4.5 bg-stone-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-stone-900 relative"></div>
+                            <div className="w-8 h-4.5 bg-stone-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-emerald-600 relative"></div>
                           </label>
 
-                          <button type="button" onClick={handlePrintDateRangeReport} className="px-2.5 py-1 bg-amber-500 text-stone-950 font-black rounded-lg text-[10px] uppercase active:scale-95">
+                          <button type="button" onClick={handleExecuteReportPrintWithCheck} className="px-2.5 py-1 bg-amber-500 text-stone-950 font-black rounded-lg text-[10px] uppercase active:scale-95">
                             <i className="fa-solid fa-print"></i> Report
                           </button>
                         </div>
                       </div>
 
+                      {/* Custom Range Inputs */}
+                      <div className="grid grid-cols-2 gap-1.5 pt-0.5">
+                        <div>
+                          <span className="block text-[8px] font-black text-stone-400 uppercase">From:</span>
+                          <input type="date" value={reportStartDate} onChange={e => setReportStartDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
+                        </div>
+                        <div>
+                          <span className="block text-[8px] font-black text-stone-400 uppercase">To:</span>
+                          <input type="date" value={reportEndDate} onChange={e => setReportEndDate(e.target.value)} className="w-full text-xs p-1 border rounded bg-stone-50 font-mono font-bold" />
+                        </div>
+                      </div>
+
                       {/* Day / Week / Month / Qtr Totals Display */}
-                      <div className="grid grid-cols-4 gap-1.5 text-center font-mono">
+                      <div className="grid grid-cols-4 gap-1.5 text-center font-mono pt-1">
                         <div className="bg-stone-50 border p-1.5 rounded-lg">
                           <span className="block text-[8px] font-black text-stone-400 uppercase">Day</span>
                           <span className="text-xs font-black text-stone-900">₹{Math.round(ledgerSummaryTotals.daySum)}</span>
@@ -2416,6 +2620,15 @@
                         type="checkbox" 
                         checked={printSettings.enableInlineAutocomplete} 
                         onChange={(e) => setPrintSettings({ ...printSettings, enableInlineAutocomplete: e.target.checked })} 
+                        className="h-4 w-4 rounded text-stone-900" 
+                      />
+                    </label>
+                    <label className="flex items-center justify-between p-2.5 border rounded-xl bg-stone-50 cursor-pointer text-xs font-bold mt-1">
+                      <span>Slim Item Checkbox Column in Draft</span>
+                      <input 
+                        type="checkbox" 
+                        checked={showItemCheckboxCol} 
+                        onChange={(e) => setShowItemCheckboxCol(e.target.checked)} 
                         className="h-4 w-4 rounded text-stone-900" 
                       />
                     </label>
@@ -2500,9 +2713,8 @@
                 <span className="text-[9px] font-black uppercase tracking-wider">Historic</span>
               </button>
 
-              {/* Password Protected Archive & Ledger Tab */}
               <button type="button" onClick={() => setCurrentTab("archive")} className={`flex flex-col items-center gap-1 py-1 px-2.5 rounded-xl min-w-[56px] min-h-[48px] justify-center transition-all ${currentTab === "archive" ? "text-amber-400 bg-stone-800" : "text-stone-400"}`}>
-                <i className={`fa-solid ${isArchiveUnlocked ? 'fa-book-bookmark' : 'fa-lock'} text-base`}></i>
+                <i className="fa-solid fa-vault text-base"></i>
                 <span className="text-[9px] font-black uppercase tracking-wider">Archive</span>
               </button>
 
