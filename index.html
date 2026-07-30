@@ -107,7 +107,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         const swCode = `
-          const CACHE_NAME = 'rough-bill-v11';
+          const CACHE_NAME = 'rough-bill-v12';
           self.addEventListener('install', e => self.skipWaiting());
           self.addEventListener('activate', e => e.waitUntil(clients.claim()));
           self.addEventListener('fetch', e => {
@@ -425,13 +425,14 @@
     };
 
     function App() {
+      // 1. Core Navigation & Form State
       const [currentTab, setCurrentTab] = useState("bill");
       const [customerName, setCustomerName] = useState("");
       const [customerCity, setCustomerCity] = useState("");
       const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
-      
       const [discountX, setDiscountX] = useState("15");
 
+      // 2. Draft & Catalog Data State
       const [baggedItems, setBaggedItems] = useState([]);
       const [dbCustomers, setDbCustomers] = useState([]);
       const [cloudProducts, setCloudProducts] = useState([]);
@@ -444,22 +445,23 @@
       const [newProdName, setNewProdNameState] = useState("");
       const [productFilterQuery, setProductFilterQuery] = useState("");
 
-      // Selected draft checkboxes map & setting toggle
+      // 3. Draft Checkboxes & Settings
       const [itemCheckboxes, setItemCheckboxes] = useState({});
       const [showItemCheckboxCol, setShowItemCheckboxCol] = useState(true);
 
-      // Password-Protected Archive Tab States
+      // 4. Archive Tab & Protected Passcode State
       const [isArchiveUnlocked, setIsArchiveUnlocked] = useState(false);
       const [archivePassInput, setArchivePassInput] = useState("");
       const [archiveSearchQuery, setArchiveSearchQuery] = useState("");
       const [includeWalkInInLedger, setIncludeWalkInInLedger] = useState(false);
 
-      // Product Catalog Sorting & Merging
-      const [productSortMode, setProductSortMode] = useState("sales"); // 'sales' or 'alphabetical'
+      // 5. Product Catalog Sorting & Merging
+      const [productSortMode, setProductSortMode] = useState("sales");
       const [selectedCatalogProduct, setSelectedCatalogProduct] = useState(null);
       const [mergeTargetSearch, setMergeTargetSearch] = useState("");
       const [showMergeSuggestions, setShowMergeTargetSuggestions] = useState(false);
 
+      // 6. UI Popups, Modals, BLE & Group Inputs
       const [visibleLogPreviews, setVisibleLogPreviews] = useState({});
       const [bleDevice, setBleDevice] = useState(null);
       const [bleCharacteristic, setBleCharacteristic] = useState(null);
@@ -467,25 +469,26 @@
       const [groupLessInputs, setGroupLessInputs] = useState({});
       const [billToDelete, setBillToDelete] = useState(null);
       const [showNewBillConfirmModal, setShowNewBillConfirmModal] = useState(false);
-
       const [showWorkerSlipModal, setShowWorkerSlipModal] = useState(false);
       const [workerNoteInput, setWorkerNoteInput] = useState("");
-
-      // Print Karigar Bill Modal
-      const [showKarigarModal, setShowKarigarModal] = useState(false);
-
-      // 30+ Entry Confirmation Modal
       const [showReportConfirmModal, setShowReportConfirmModal] = useState(false);
 
+      // 7. Offline & Sync State
       const [isOnline, setIsOnline] = useState(navigator.onLine);
       const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
+      // 8. Last Balance State
       const [includeLastBalance, setIncludeLastBalance] = useState(false);
       const [lastBalanceAmount, setLastBalanceAmount] = useState(0);
       const [isFetchingLastBalance, setIsFetchingLastBalance] = useState(false);
       const [lastBilledInfo, setLastBilledInfo] = useState(null);
 
-      // Print settings with showSNo defaulting to true
+      // 9. Report Date Range States (DECLARED BEFORE HOOKS/MEMOS!)
+      const [reportPreset, setReportPreset] = useState("2days");
+      const [reportStartDate, setReportStartDate] = useState(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
+      const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().split('T')[0]);
+
+      // 10. Print Settings State
       const [printSettings, setPrintSettings] = useState(() => {
         try {
           const saved = localStorage.getItem("roughBillPrintSettings");
@@ -502,6 +505,14 @@
           enableInlineAutocomplete: true, footerMessage: "Thank You For Your Visit\nPlease Visit Again"
         };
       });
+
+      // 11. Component Element Refs
+      const custRef = useRef(null);
+      const parserRef = useRef(null);
+      const baggedListRef = useRef(null);
+
+      const activeScriptUrl = printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL;
+      const lastBalScriptUrl = printSettings.lastBalanceSheetUrl || DEFAULT_LAST_BAL_SCRIPT_URL;
 
       useEffect(() => {
         try { localStorage.setItem("roughBillPrintSettings", JSON.stringify(printSettings)); } catch (e) {}
@@ -529,18 +540,6 @@
         } catch (e) {}
       }, [customerName, customerCity, discountX, baggedItems, includeLastBalance, lastBalanceAmount]);
 
-      const custRef = useRef(null);
-      const parserRef = useRef(null);
-      const baggedListRef = useRef(null);
-
-      const activeScriptUrl = printSettings.primarySheetUrl || DEFAULT_SCRIPT_URL;
-      const lastBalScriptUrl = printSettings.lastBalanceSheetUrl || DEFAULT_LAST_BAL_SCRIPT_URL;
-
-      const triggerNotification = (msg) => {
-        setNotification(msg);
-        setTimeout(() => setNotification(""), 3500);
-      };
-
       // Outside click listener for Customer Suggestions Dropdown
       useEffect(() => {
         const handleClickOutside = (e) => {
@@ -556,6 +555,7 @@
         };
       }, []);
 
+      // Filtered Customers
       const filteredSheetsCustomers = useMemo(() => {
         if (!dbCustomers || !Array.isArray(dbCustomers)) return [];
         const query = customerName.trim().toLowerCase();
@@ -617,989 +617,6 @@
         window.open(url, "_blank");
       };
 
-      const getNormalizedKey = (str) => str ? String(str).toLowerCase().trim().replace(/\s+/g, ' ') : "";
-      const toTitleCase = (str) => String(str || "").replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-
-      const getCityCode = (val) => {
-        if (!val || String(val).toUpperCase() === "LOCAL") return "LOCA";
-        const cleaned = String(val).replace(/[^a-zA-Z]/g, "").toUpperCase();
-        return cleaned.slice(0, 4) || "LOCA";
-      };
-
-      // Compute last balance EXCLUDING the active bill being edited/created
-      const computeLastBalanceFromTxnsArray = (txnsList, nameVal) => {
-        if (!nameVal || !nameVal.trim() || !Array.isArray(txnsList)) return { balance: 0, latestBill: null };
-        const targetKey = getNormalizedKey(nameVal);
-        let bSum = 0, pSum = 0, latestBill = null;
-
-        txnsList.forEach(t => {
-          const tName = getNormalizedKey(getTxnName(t));
-          if (tName === targetKey) {
-            const tIdStr = String(getTxnId(t));
-            // Exclude current editing bill ID so it doesn't show itself as LAST BILL!
-            if (editingBillId && tIdStr === String(editingBillId)) return;
-
-            const typeStr = getTxnType(t);
-            const amt = getTxnAmount(t);
-            if (typeStr === "pay") pSum += amt;
-            else if (typeStr === "bill") {
-              bSum += amt;
-              if (amt > 0) {
-                const tId = getTxnId(t) ? Number(getTxnId(t)) : 0;
-                const curLatestId = latestBill ? (getTxnId(latestBill) ? Number(getTxnId(latestBill)) : 0) : -1;
-                if (!latestBill || tId >= curLatestId) latestBill = t;
-              }
-            }
-          }
-        });
-
-        return { balance: bSum - pSum, latestBill: latestBill };
-      };
-
-      const fetchLastBalanceInBackground = (nameVal, forceFetch = false) => {
-        if (!nameVal || nameVal.trim() === "") {
-          setLastBalanceAmount(0); setLastBilledInfo(null);
-          return;
-        }
-
-        const key = getNormalizedKey(nameVal);
-        const cache = getLocalBalancesCache();
-        const cachedItem = cache[key];
-
-        if (cachedItem && !forceFetch) {
-          setLastBalanceAmount(cachedItem.balance || 0);
-          setLastBilledInfo(cachedItem.lastBilledInfo || null);
-          if (cachedItem.updatedDate === getTodayDateStr()) return;
-        }
-
-        setIsFetchingLastBalance(true);
-        const callbackName = "handleBalanceFetch_" + Math.floor(Math.random() * 100000);
-
-        const timeoutId = setTimeout(() => {
-          if (window[callbackName]) {
-            setIsFetchingLastBalance(false);
-            document.getElementById(callbackName)?.remove();
-            delete window[callbackName];
-          }
-        }, 8000);
-
-        window[callbackName] = (data) => {
-          clearTimeout(timeoutId);
-          if (data) {
-            let txns = data.txns || data.Txns || data.transactions || data.Transactions || (Array.isArray(data) ? data : []);
-            const remoteResult = computeLastBalanceFromTxnsArray(txns, nameVal);
-
-            let finalBal = remoteResult.balance;
-            if (data.balance !== undefined && !isNaN(parseFloat(data.balance))) finalBal = parseFloat(data.balance);
-
-            setLastBalanceAmount(finalBal);
-
-            let activeLatestBill = remoteResult.latestBill;
-            let billingObj = null;
-
-            if (activeLatestBill) {
-              const rawDate = getTxnDate(activeLatestBill) || activeLatestBill.timestamp;
-              const formattedDDMM = formatDDMM(rawDate);
-              const bAmt = getTxnAmount(activeLatestBill);
-              const codeAmt = encodeCustomCipher(bAmt);
-              billingObj = {
-                date: formattedDDMM, amount: bAmt, code: codeAmt, display: `${formattedDDMM} ${codeAmt}`
-              };
-            }
-
-            setLastBilledInfo(billingObj);
-            saveLocalBalanceCache(nameVal, finalBal, billingObj);
-          }
-          setIsFetchingLastBalance(false);
-          document.getElementById(callbackName)?.remove();
-          delete window[callbackName];
-        };
-
-        const script = document.createElement("script");
-        script.id = callbackName;
-        script.src = `${lastBalScriptUrl}?action=getData&callback=${callbackName}`;
-        script.onerror = () => {
-          clearTimeout(timeoutId);
-          setIsFetchingLastBalance(false);
-          script.remove();
-          delete window[callbackName];
-        };
-        document.body.appendChild(script);
-      };
-
-      useEffect(() => {
-        if (includeLastBalance && customerName.trim() !== "") {
-          fetchLastBalanceInBackground(customerName, false);
-        }
-      }, [includeLastBalance, customerName]);
-
-      useEffect(() => {
-        const loadIDBCache = async () => {
-          const cachedBills = await idbStorage.getAllBills();
-          const cachedProds = await idbStorage.getProducts();
-          const cachedCusts = await idbStorage.getCustomers();
-          const pending = await idbStorage.getPending();
-
-          const deletedKeys = getDeletedProductKeys();
-          const deletedBillIds = getDeletedBillIds();
-
-          if (cachedBills.length > 0) {
-            const validCached = cachedBills.filter(b => b && getTxnId(b) && !deletedBillIds.includes(String(getTxnId(b))));
-            const sorted = validCached.sort((a, b) => (getTxnId(b) ? Number(getTxnId(b)) : 0) - (getTxnId(a) ? Number(getTxnId(a)) : 0));
-            setCloudBills(sorted);
-          }
-          if (cachedProds.length > 0) {
-            const filteredProds = cachedProds.filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)));
-            setCloudProducts(filteredProds);
-          }
-          if (cachedCusts.length > 0) setDbCustomers(cachedCusts);
-          setPendingSyncCount(pending.length);
-        };
-        loadIDBCache();
-      }, []);
-
-      useEffect(() => {
-        const handleOnline = () => {
-          setIsOnline(true);
-          triggerNotification("📶 Online! Auto-syncing pending offline bills...");
-          syncPendingOfflineBills();
-        };
-        const handleOffline = () => {
-          setIsOnline(false);
-          triggerNotification("⚡ Network Disconnected - Switching to IndexedDB Local Mode");
-        };
-
-        window.addEventListener("online", handleOnline);
-        window.addEventListener("offline", handleOffline);
-
-        return () => {
-          window.removeEventListener("online", handleOnline);
-          window.removeEventListener("offline", handleOffline);
-        };
-      }, []);
-
-      const syncPendingOfflineBills = async () => {
-        if (!navigator.onLine) return;
-        const pending = await idbStorage.getPending();
-        if (pending.length === 0) { setPendingSyncCount(0); return; }
-
-        let syncedCount = 0;
-        for (const bill of pending) {
-          try {
-            await window.firebaseBridge.saveBillToCloudWithNumericId(bill.id, bill, false, activeScriptUrl);
-            syncedCount++;
-          } catch (e) {}
-        }
-
-        const remainingPending = await idbStorage.getPending();
-        setPendingSyncCount(remainingPending.length);
-
-        if (syncedCount > 0) {
-          triggerNotification(`✓ Auto-synced ${syncedCount} offline bill(s) to Sheets!`);
-          syncDataFromGoogleSheets();
-        }
-      };
-
-      const syncDataFromGoogleSheets = () => {
-        const callbackName = "handleSheetsSync_" + Math.floor(Math.random() * 100000);
-        window[callbackName] = (data) => {
-          if (data) {
-            const deletedKeys = getDeletedProductKeys();
-            const deletedBillIds = getDeletedBillIds();
-
-            const rawCusts = data.customers || data.Customers || [];
-            const rawProds = data.products || data.Products || [];
-            const rawTxns = data.txns || data.Txns || data.transactions || data.Transactions || [];
-
-            if (rawCusts) {
-              let parsedCustomers = [];
-              if (Array.isArray(rawCusts)) {
-                parsedCustomers = rawCusts.map(c => {
-                  if (typeof c === 'string') return { name: c, phone: "", city: "" };
-                  if (typeof c === 'object' && c !== null) {
-                    const name = c.name || c.Name || c.customerName || c.CustomerName || c[0] || "";
-                    const phone = c.phone || c.Phone || c.discount || c.Discount || c[1] || "";
-                    const rawCity = String(c.city || c.City || c[2] || "");
-                    const city = (rawCity.toLowerCase() === "local") ? "" : rawCity;
-                    return { name, phone, city };
-                  }
-                  return null;
-                }).filter(c => c && c.name);
-              } else if (typeof rawCusts === 'object' && rawCusts !== null) {
-                parsedCustomers = Object.entries(rawCusts).map(([name, details]) => {
-                  if (typeof details === 'object' && details !== null) {
-                    const phone = details.phone || details.Phone || details.discount || details.Discount || "";
-                    const rawCity = String(details.city || details.City || "");
-                    const city = (rawCity.toLowerCase() === "local") ? "" : rawCity;
-                    return { name, phone, city };
-                  }
-                  return { name, phone: "", city: "" };
-                }).filter(c => c && c.name);
-              }
-              setDbCustomers(parsedCustomers);
-              window.firebaseBridge.customers = parsedCustomers;
-              idbStorage.cacheCustomers(parsedCustomers);
-            }
-
-            if (rawProds) {
-              const validProds = rawProds.filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)));
-              setCloudProducts(validProds);
-              window.firebaseBridge.products = validProds;
-              idbStorage.cacheProducts(validProds);
-            }
-
-            if (rawTxns) {
-              setCloudBills(prevBills => {
-                const prevMap = new Map();
-                prevBills.forEach(b => prevMap.set(String(getTxnId(b)), b));
-
-                const remoteValid = rawTxns.filter(b => getTxnId(b) && !deletedBillIds.includes(String(getTxnId(b))));
-
-                const merged = remoteValid.map(remoteTxn => {
-                  const remoteId = String(getTxnId(remoteTxn));
-                  const localTxn = prevMap.get(remoteId);
-                  const remoteItems = parseItemsSafely(getTxnItems(remoteTxn));
-                  const remoteName = getTxnName(remoteTxn) || "Walk-In Customer";
-                  const remoteCity = remoteTxn.customerCity || remoteTxn.city || "";
-
-                  if (localTxn && (Date.now() - (localTxn.localUpdatedAt || 0)) < 30000 && parseItemsSafely(localTxn.items).length > 0) {
-                    return { ...remoteTxn, ...localTxn, id: remoteId };
-                  }
-
-                  return {
-                    ...remoteTxn, id: remoteId, customerName: remoteName, customerCity: remoteCity,
-                    items: remoteItems, totalAmount: getTxnAmount(remoteTxn), type: getTxnType(remoteTxn)
-                  };
-                });
-
-                prevBills.forEach(localTxn => {
-                  const lId = String(getTxnId(localTxn));
-                  if (!deletedBillIds.includes(lId) && !merged.some(m => String(getTxnId(m)) === lId)) merged.push(localTxn);
-                });
-
-                const sortedTxns = merged.sort((a, b) => (getTxnId(b) ? Number(getTxnId(b)) : 0) - (getTxnId(a) ? Number(getTxnId(a)) : 0));
-                window.firebaseBridge.bills = sortedTxns;
-                sortedTxns.forEach(b => idbStorage.saveBill(b, false));
-                return sortedTxns;
-              });
-            }
-          }
-          document.getElementById(callbackName)?.remove();
-          delete window[callbackName];
-        };
-
-        const script = document.createElement("script");
-        script.id = callbackName;
-        script.src = `${activeScriptUrl}?action=getData&callback=${callbackName}`;
-        document.body.appendChild(script);
-      };
-
-      useEffect(() => {
-        syncDataFromGoogleSheets();
-        const interval = setInterval(() => {
-          if (navigator.onLine) {
-            syncDataFromGoogleSheets();
-            syncPendingOfflineBills();
-          }
-          if (bleDevice && !bleCharacteristic) reconnectBLEPrinterQuietly();
-        }, 6000);
-        return () => clearInterval(interval);
-      }, [bleDevice, bleCharacteristic, activeScriptUrl]);
-
-      useEffect(() => {
-        if (currentTab === "bill" && parserRef.current) parserRef.current.focus();
-      }, [currentTab]);
-
-      const formatInvoiceDateTime = (dateStr) => {
-        const baseDate = dateStr ? new Date(dateStr) : new Date();
-        const currentRealTime = new Date();
-        if (isNaN(baseDate.getTime())) return "";
-        baseDate.setHours(currentRealTime.getHours(), currentRealTime.getMinutes());
-        
-        const datePart = formatDDMM(baseDate);
-        const timePart = `${String(baseDate.getHours()).padStart(2, '0')}:${String(baseDate.getMinutes()).padStart(2, '0')}`;
-
-        if (printSettings.showDate && printSettings.showTime) return `${datePart} ${timePart}`;
-        if (printSettings.showDate) return datePart;
-        if (printSettings.showTime) return timePart;
-        return "";
-      };
-
-      const handleCustomerSearchAndSelect = (nameVal) => {
-        triggerHaptic(20);
-        const match = dbCustomers.find(c => c && c.name && c.name.toLowerCase().trim() === nameVal.toLowerCase().trim());
-        if (match) {
-          setCustomerName(match.name);
-          setCustomerCity(match.city && String(match.city).toLowerCase() !== "local" ? match.city : "");
-          setShowCustSuggestions(false);
-          fetchLastBalanceInBackground(match.name, false);
-        } else {
-          setCustomerName(nameVal);
-          setShowCustSuggestions(false);
-        }
-      };
-
-      const handleResetAll = () => {
-        setCustomerName(""); setCustomerCity(""); setDiscountX("15");
-        setBaggedItems([]); setEditingBillId(null); setParserInput("");
-        setGroupLessInputs({}); setIncludeLastBalance(false);
-        setLastBalanceAmount(0); setLastBilledInfo(null);
-        try { localStorage.removeItem("billDraftData"); } catch(e) {}
-        setTimeout(() => { if (parserRef.current) parserRef.current.focus(); }, 100);
-      };
-
-      const handleLoadHistoricalBill = (historicalBillObj) => {
-        const loadedCustName = getTxnName(historicalBillObj) || "";
-        const loadedCity = historicalBillObj.customerCity || historicalBillObj.city || "";
-
-        setCustomerName(loadedCustName);
-        setCustomerCity(loadedCity && String(loadedCity).toLowerCase() !== "local" ? loadedCity : "");
-        setBillDate(getTxnDate(historicalBillObj) ? String(getTxnDate(historicalBillObj)).split(' ')[0] : new Date().toISOString().split('T')[0]);
-        
-        const rawItems = parseItemsSafely(getTxnItems(historicalBillObj));
-        const normalized = rawItems.map((i, idx) => {
-          const qtyVal = parseFloat(i.qty) || 1;
-          const priceVal = parseFloat(i.basePrice || i.rate || i.price || i.finalUnitPrice || 0);
-          const lessVal = (i.less !== undefined && i.less !== null && String(i.less) !== "—") ? String(i.less) : "0";
-          const deduct = (lessVal !== "—" && !isNaN(parseFloat(lessVal))) ? parseFloat(lessVal) : 0;
-          const finalPrice = Math.max(0, priceVal - deduct);
-
-          return {
-            id: 'loaded_' + Date.now() + '_' + idx,
-            qty: qtyVal, name: i.name || "Item",
-            code: (i.code && String(i.code) !== "—") ? String(i.code) : "—",
-            basePrice: priceVal, less: lessVal,
-            finalUnitPrice: finalPrice, totalAmount: qtyVal * finalPrice
-          };
-        });
-
-        setBaggedItems(normalized);
-        setEditingBillId(String(getTxnId(historicalBillObj)) || null);
-        setCurrentTab("bill");
-        triggerNotification(`✓ Loaded bill with ${normalized.length} item(s)!`);
-        if (loadedCustName) fetchLastBalanceInBackground(loadedCustName, false);
-      };
-
-      const calculateRateForToken = (codeStr, rawX) => {
-        const cleanCode = String(codeStr || "").toLowerCase().trim();
-        const discountRate = parseFloat(rawX) || 0;
-        if (cleanCode.endsWith('n')) {
-          const val = parseFloat(cleanCode.slice(0, -1));
-          return !isNaN(val) ? val * 5 : 0;
-        }
-        if (cleanCode.endsWith('no') || cleanCode.endsWith('nu')) {
-          const val = parseFloat(cleanCode.replace(/(no|nu)$/, ''));
-          if (!isNaN(val)) {
-            const baseMultiplierPrice = val * 5;
-            return baseMultiplierPrice - (baseMultiplierPrice * (discountRate / 100));
-          }
-          return 0;
-        }
-        return !isNaN(parseFloat(cleanCode)) ? parseFloat(cleanCode) : 0;
-      };
-
-      // Most Typed Products Directory
-      const mostTypedProducts = useMemo(() => {
-        if (!cloudProducts || !Array.isArray(cloudProducts)) return [];
-        const deletedKeys = getDeletedProductKeys();
-        const counts = {};
-        cloudBills.forEach(b => {
-          parseItemsSafely(getTxnItems(b)).forEach(i => {
-            if (i && i.name) {
-              const k = getNormalizedKey(i.name);
-              counts[k] = (counts[k] || 0) + (parseFloat(i.qty) || 1);
-            }
-          });
-        });
-
-        return [...cloudProducts]
-          .filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)))
-          .sort((a, b) => (counts[getNormalizedKey(b.name)] || 0) - (counts[getNormalizedKey(a.name)] || 0));
-      }, [cloudProducts, cloudBills]);
-
-      // Product Analytics: Sales & Qty Sold calculation for Product Catalog
-      const productAnalyticsMap = useMemo(() => {
-        const stats = {};
-        cloudBills.forEach(b => {
-          parseItemsSafely(getTxnItems(b)).forEach(i => {
-            if (i && i.name) {
-              const key = getNormalizedKey(i.name);
-              if (!stats[key]) stats[key] = { qty: 0, sales: 0 };
-              const q = parseFloat(i.qty) || 1;
-              const amt = getItemTotalAmount(i);
-              stats[key].qty += q;
-              stats[key].sales += amt;
-            }
-          });
-        });
-        return stats;
-      }, [cloudBills]);
-
-      // Sorted Products List for Catalog (Sort by Sales Qty or Alphabetically)
-      const sortedCatalogProducts = useMemo(() => {
-        if (!cloudProducts) return [];
-        const deletedKeys = getDeletedProductKeys();
-        const filtered = cloudProducts.filter(p => p && p.name && !deletedKeys.includes(getNormalizedKey(p.name)) && p.name.toLowerCase().includes(productFilterQuery.toLowerCase()));
-
-        return filtered.sort((a, b) => {
-          if (productSortMode === "sales") {
-            const qtyA = productAnalyticsMap[getNormalizedKey(a.name)]?.qty || 0;
-            const qtyB = productAnalyticsMap[getNormalizedKey(b.name)]?.qty || 0;
-            if (qtyB !== qtyA) return qtyB - qtyA;
-          }
-          return (a.name || "").localeCompare((b.name || ""), undefined, { sensitivity: 'base' });
-        });
-      }, [cloudProducts, productFilterQuery, productSortMode, productAnalyticsMap]);
-
-      const autocompleteSuggestion = useMemo(() => {
-        if (!printSettings.enableInlineAutocomplete || !parserInput.trim()) return "";
-        const trimmed = parserInput.trimStart();
-        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-        const typedText = match ? match[2].trim() : trimmed;
-        if (!typedText) return "";
-
-        const candidate = mostTypedProducts.find(p => p.name.toLowerCase().startsWith(typedText.toLowerCase()));
-        if (candidate && candidate.name.toLowerCase() !== typedText.toLowerCase()) {
-          return candidate.name.slice(typedText.length);
-        }
-        return "";
-      }, [parserInput, mostTypedProducts, printSettings.enableInlineAutocomplete]);
-
-      const handleParserSubmit = (e) => {
-        e.preventDefault();
-        let rawInput = parserInput.trim();
-        if (!rawInput) return;
-
-        triggerHaptic(30);
-
-        if (autocompleteSuggestion) rawInput = rawInput + autocompleteSuggestion;
-
-        const isSuffixCode = (str) => {
-          const s = String(str || "").toLowerCase().trim();
-          return s.endsWith('n') || s.endsWith('no') || s.endsWith('nu');
-        };
-
-        let parsedQty = 1, codeValue = "—", unitPrice = 0, rawProdName = "";
-        const match = rawInput.match(/^(\d+(?:\.\d+)?)\s+(.+)$/);
-
-        if (match) {
-          parsedQty = parseFloat(match[1]);
-          const tokens = match[2].trim().split(/\s+/);
-          const lastToken = tokens[tokens.length - 1];
-
-          if (isSuffixCode(lastToken)) {
-            codeValue = lastToken;
-            unitPrice = calculateRateForToken(codeValue, discountX);
-            tokens.pop();
-          } else if (!isNaN(parseFloat(lastToken)) && isFinite(lastToken)) {
-            codeValue = "—";
-            unitPrice = parseFloat(lastToken);
-            tokens.pop();
-          }
-          rawProdName = tokens.join(" ").trim();
-        } else {
-          parsedQty = 1;
-          const tokens = rawInput.split(/\s+/);
-          const lastToken = tokens[tokens.length - 1];
-
-          if (isSuffixCode(lastToken)) {
-            codeValue = lastToken;
-            unitPrice = calculateRateForToken(codeValue, discountX);
-            tokens.pop();
-            rawProdName = tokens.join(" ").trim();
-          } else if (!isNaN(parseFloat(lastToken)) && isFinite(lastToken)) {
-            codeValue = "—";
-            unitPrice = parseFloat(lastToken);
-            tokens.pop();
-            rawProdName = tokens.join(" ").trim();
-          } else {
-            rawProdName = rawInput;
-            unitPrice = 0;
-          }
-        }
-
-        if (!rawProdName) rawProdName = lastProductName || "Item";
-        else setLastProductName(rawProdName);
-
-        const displayCasing = toTitleCase(rawProdName);
-        if (!cloudProducts.some(p => p && p.name && getNormalizedKey(p.name) === getNormalizedKey(displayCasing))) {
-          window.firebaseBridge.addProductToCloud({ name: displayCasing }, activeScriptUrl);
-          const updatedProds = [...cloudProducts, { id: Date.now(), name: displayCasing }];
-          setCloudProducts(updatedProds);
-          idbStorage.cacheProducts(updatedProds);
-        }
-
-        const newItem = {
-          id: 'item_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7), 
-          qty: parsedQty, name: displayCasing, code: codeValue,
-          basePrice: unitPrice, less: "0", finalUnitPrice: unitPrice, totalAmount: parsedQty * unitPrice
-        };
-
-        setBaggedItems(prev => [newItem, ...prev]);
-        setParserInput(""); 
-
-        if (baggedListRef.current) baggedListRef.current.scrollTop = 0;
-        if (parserRef.current) parserRef.current.focus();
-      };
-
-      const handleEditBaggedItem = (id, field, value) => {
-        setBaggedItems(prev => prev.map(item => {
-          if (String(item.id) === String(id)) {
-            const updated = { ...item };
-            if (field === 'qty') updated.qty = parseFloat(value) || 0;
-            if (field === 'name') updated.name = value;
-            if (field === 'code') updated.code = value;
-            if (field === 'basePrice') updated.basePrice = parseFloat(value) || 0;
-            if (field === 'less') updated.less = value;
-
-            if (updated.code !== "—" && String(updated.code) !== "" && field === 'code') {
-              updated.basePrice = calculateRateForToken(updated.code, discountX);
-            }
-
-            let deduction = 0;
-            const cleanLess = String(updated.less || "").trim();
-            if (cleanLess !== "" && cleanLess !== "—") deduction = parseFloat(cleanLess) || 0;
-
-            updated.finalUnitPrice = Math.max(0, updated.basePrice - deduction);
-            updated.totalAmount = updated.qty * updated.finalUnitPrice;
-            return updated;
-          }
-          return item;
-        }));
-      };
-
-      const applyGroupLessDiscount = (groupKey, lessValStr) => {
-        triggerHaptic(30);
-        const amt = parseFloat(lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10") || 0;
-        setBaggedItems(prev => prev.map(item => {
-          if (getNormalizedKey(item.name) === groupKey) {
-            const updated = { ...item, less: String(amt) };
-            updated.finalUnitPrice = Math.max(0, updated.basePrice - amt);
-            updated.totalAmount = updated.qty * updated.finalUnitPrice;
-            return updated;
-          }
-          return item;
-        }));
-        triggerNotification(`Applied ₹${amt} Less to ${groupKey.toUpperCase()} items!`);
-      };
-
-      const groupedBaggedItems = useMemo(() => {
-        const groups = {};
-        baggedItems.forEach(item => {
-          const key = getNormalizedKey(item.name);
-          if (!groups[key]) {
-            groups[key] = { key, displayName: item.name || "Item", totalQty: 0, totalAmount: 0, items: [] };
-          }
-          groups[key].items.push(item);
-          groups[key].totalQty += (parseFloat(item.qty) || 0);
-          groups[key].totalAmount += getItemTotalAmount(item);
-        });
-        return Object.values(groups);
-      }, [baggedItems]);
-
-      const currentBillTotalSum = useMemo(() => baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0), [baggedItems]);
-      const grandFinalBalance = useMemo(() => Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0)), [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
-
-      // Print Receipt Table Generator:
-      // Column order: # (S.No) -> QT -> ITEM -> P -> AMT
-      // Item name code alongside if < 15 chars, or on next line if >= 15 chars
-      // Dotted line after every 5 entries
-      // Label: LB: (Last Balance)
-      const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
-        const safeItems = Array.isArray(itemsList) ? itemsList : [];
-        const sortedItems = [...safeItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
-        const total = sortedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0);
-
-        const fontFamCss = (printSettings?.fontFamily === 'Roboto Mono') ? "'Roboto Mono', monospace" : "'Courier Prime', monospace";
-        const fSizePx = `${printSettings?.fontSize || 24}px`;
-        const rPadPx = `${printSettings?.rowSpacing || 8}px`;
-        const cPadPx = `${printSettings?.colSpacing || 4}px`;
-
-        const nameWithJI = formatCustomerNameJI(custName);
-        const nameStr = (printSettings?.showName) ? nameWithJI : "";
-        const cityStr = (printSettings?.showCity && cityVal && String(cityVal).toLowerCase() !== "local") ? `(${getCityCode(cityVal)})` : "";
-        const nameCityLine = [nameStr, cityStr].filter(Boolean).join(" ");
-
-        const dateStrFormatted = formatInvoiceDateTime(billDate);
-        const lastBillLine = lastBilledInfo ? `LAST BILL: ${lastBilledInfo.display}` : "";
-
-        const footerMessageRaw = printSettings?.footerMessage || "Thank You For Your Visit\nPlease Visit Again";
-        const footerLines = String(footerMessageRaw).split('\n');
-
-        let receiptHTML = `
-          <div style="font-family: ${fontFamCss};" class="text-center pb-3 mb-3 border-b-4 border-black">
-            <h2 style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*1.4)}px;" class="font-black uppercase tracking-widest leading-none">ESTIMATE RECEIPT</h2>
-            <p style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*0.8)}px;" class="font-bold mt-1">Rough Statement Profile</p>
-            ${(nameCityLine || dateStrFormatted || lastBillLine) ? `
-              <div style="font-size: ${fSizePx};" class="mt-2 text-center font-black border-y-2 border-dashed border-black py-1.5 space-y-0.5">
-                ${nameCityLine ? `<div>${nameCityLine}</div>` : ""}
-                ${dateStrFormatted ? `<div class="mt-0.5">${dateStrFormatted}</div>` : ""}
-                ${lastBillLine ? `<div class="mt-0.5 font-mono text-[0.9em]">${lastBillLine}</div>` : ""}
-              </div>
-            ` : ""}
-          </div>
-          <table style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="w-full text-left mt-2 border-collapse font-bold">
-            <thead>
-              <tr class="border-b-4 border-black uppercase">
-                ${printSettings?.showSNo ? `<th style="padding: ${rPadPx} ${cPadPx};" class="w-8 text-center">#</th>` : ""}
-                <th style="padding: ${rPadPx} ${cPadPx};" class="w-14 text-center">QT</th>
-                <th style="padding: ${rPadPx} ${cPadPx};">ITEM</th>
-                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-24">P</th>
-                <th style="padding: ${rPadPx} ${cPadPx};" class="text-right w-28">AMT</th>
-              </tr>
-            </thead>
-            <tbody>
-        `;
-
-        sortedItems.forEach((item, index) => {
-          const rawName = String(item.name || "").trim().toUpperCase();
-          const rawCodeOnly = (item.code && String(item.code) !== "—") ? String(item.code).trim().toUpperCase() : "";
-          const itemAmt = getItemTotalAmount(item);
-          const unitP = item.finalUnitPrice !== undefined ? item.finalUnitPrice : (item.rate || item.basePrice || 0);
-
-          let itemDisplayHTML = "";
-          if (rawCodeOnly) {
-            if (rawName.length < 15) {
-              itemDisplayHTML = `<div>${rawName} <span style="font-size: 0.85em;" class="text-stone-700 font-normal">(${rawCodeOnly})</span></div>`;
-            } else {
-              itemDisplayHTML = `
-                <div>${rawName}</div>
-                <div style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*0.75)}px;" class="text-stone-700 font-normal tracking-wide">${rawCodeOnly}</div>
-              `;
-            }
-          } else {
-            itemDisplayHTML = `<div>${rawName}</div>`;
-          }
-
-          receiptHTML += `
-            <tr class="align-top border-b border-stone-200">
-              ${printSettings?.showSNo ? `<td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${index + 1}</td>` : ""}
-              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-center font-bold">${Math.round(item.qty || 1)}</td>
-              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="font-bold uppercase whitespace-pre-wrap break-all leading-tight">
-                ${itemDisplayHTML}
-              </td>
-              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(unitP)}</td>
-              <td style="padding: ${rPadPx} ${cPadPx}; font-size: ${fSizePx};" class="text-right font-bold">${Math.round(itemAmt)}</td>
-            </tr>
-          `;
-
-          if ((index + 1) % 5 === 0 && index !== sortedItems.length - 1) {
-            receiptHTML += `<tr><td colSpan="${printSettings?.showSNo ? 5 : 4}" class="py-1 border-b-2 border-dotted border-stone-400"></td></tr>`;
-          }
-        });
-
-        receiptHTML += `
-            </tbody>
-          </table>
-          <div style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="mt-6 pt-3 border-t-4 border-dashed border-black text-right space-y-2 font-bold">
-            <div class="flex justify-between font-black">
-              <span>Bill Total:</span>
-              <span>₹${Math.round(total)}</span>
-            </div>
-            ${includeLastBalance ? `
-              <div class="flex justify-between font-bold text-stone-700">
-                <span>LB:</span>
-                <span>₹${Math.round(lastBalanceAmount)}</span>
-              </div>
-            ` : ""}
-            <div style="font-size: ${Math.round(parseInt(printSettings?.fontSize || 24)*1.25)}px;" class="flex justify-between font-black border-t-4 border-black pt-2 mt-1">
-              <span>TOTAL:</span>
-              <span>₹${Math.round(total + (includeLastBalance ? lastBalanceAmount : 0))}</span>
-            </div>
-          </div>
-          <div style="font-family: ${fontFamCss}; font-size: ${fSizePx};" class="mt-10 text-center font-bold pt-4 border-t-2 border-black">
-            ${footerLines.map(line => `<div>${line}</div>`).join('')}
-          </div>
-        `;
-
-        return receiptHTML;
-      };
-
-      const handleGenerateAndPrintBill = async () => {
-        if (baggedItems.length === 0) return;
-        
-        triggerHaptic(40);
-
-        const synchronousIsEdit = !!editingBillId;
-        const uniqueNumericId = editingBillId ? Number(editingBillId) : Date.now();
-        const printDateFormatted = formatInvoiceDateTime(billDate);
-        const rawCustomerName = customerName.trim() || "Walk-In Customer";
-
-        const printBody = document.getElementById("printable-bill-invoice");
-        if (printBody) {
-          printBody.innerHTML = renderReceiptForSpool(baggedItems, rawCustomerName, customerCity, printDateFormatted);
-        }
-        
-        if (bleCharacteristic) {
-          try {
-            await printBLEThermalDirectly(baggedItems, rawCustomerName, customerCity, printDateFormatted);
-          } catch (e) {
-            window.print();
-          }
-        } else {
-          window.print();
-        }
-
-        const billDataObject = {
-          id: uniqueNumericId,
-          customerName: rawCustomerName,
-          customerCity: customerCity || "Local",
-          date: billDate,
-          items: baggedItems,
-          currentBillAmount: currentBillTotalSum,
-          totalAmount: currentBillTotalSum,
-          discountRate: parseFloat(discountX) || 0,
-          timestamp: uniqueNumericId,
-          formattedDateTime: printDateFormatted,
-          localUpdatedAt: Date.now()
-        };
-
-        setCloudBills(prev => [billDataObject, ...prev.filter(b => String(getTxnId(b)) !== String(uniqueNumericId))]);
-
-        if (rawCustomerName) {
-          const updatedBal = lastBalanceAmount + currentBillTotalSum;
-          const currentBilledInfo = {
-            date: formatDDMM(billDate),
-            amount: currentBillTotalSum,
-            code: encodeCustomCipher(currentBillTotalSum),
-            display: `${formatDDMM(billDate)} ${encodeCustomCipher(currentBillTotalSum)}`
-          };
-          saveLocalBalanceCache(rawCustomerName, updatedBal, currentBilledInfo);
-        }
-
-        window.firebaseBridge.saveBillToCloudWithNumericId(uniqueNumericId, billDataObject, synchronousIsEdit, activeScriptUrl)
-          .then(() => triggerNotification("✓ Printed & saved to Sheets!"))
-          .catch(() => {
-            setPendingSyncCount(prev => prev + 1);
-            triggerNotification("⚡ Printed & saved locally! Will auto-sync when online.");
-          });
-
-        setTimeout(() => handleResetAll(), 300);
-      };
-
-      // Print Worker Slip with HTML Spooling Fix
-      const handlePrintWorkerSlip = () => {
-        triggerHaptic(40);
-        const textToPrint = workerNoteInput.trim() || baggedItems.map(i => `${Math.round(i.qty)} ${i.name}`).join("\n");
-        if (!textToPrint) {
-          triggerNotification("Enter items or add draft products first.");
-          return;
-        }
-
-        const slipHTML = `
-          <div class="font-mono text-[24px] p-4 font-black text-center border-b-4 border-black">
-            <h2>WORKER GATHERING SLIP</h2>
-            <p class="text-[18px] font-bold mt-1">Customer: ${formatCustomerNameJI(customerName)}</p>
-            <p class="text-[16px] text-stone-600">${formatInvoiceDateTime(billDate)}</p>
-          </div>
-          <div class="font-mono text-[22px] p-4 whitespace-pre-wrap font-bold leading-relaxed border-b-2 border-black">
-            ${textToPrint}
-          </div>
-          <div class="font-mono text-center text-[16px] mt-4 font-bold">Gathered By Worker: ____________</div>
-        `;
-
-        const printBody = document.getElementById("printable-bill-invoice");
-        if (printBody) {
-          printBody.innerHTML = slipHTML;
-          setTimeout(() => window.print(), 150);
-        }
-      };
-
-      // Print Karigar Artisan Bill (For Tallying only, NOT saved anywhere)
-      const handlePrintKarigarBill = () => {
-        triggerHaptic(40);
-        if (baggedItems.length === 0) {
-          triggerNotification("Draft is empty. Add items first.");
-          return;
-        }
-
-        const sortedItems = [...baggedItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
-        const totalPcs = sortedItems.reduce((acc, i) => acc + (parseFloat(i.qty) || 1), 0);
-
-        let karigarHTML = `
-          <div class="font-mono text-[24px] p-3 text-center border-b-4 border-black">
-            <h2 class="font-black uppercase">KARIGAR TALLY SLIP</h2>
-            <p class="text-[18px] font-bold mt-0.5">Artisan Work Check</p>
-            <p class="text-[16px] text-stone-700 mt-0.5">${formatCustomerNameJI(customerName)} | ${formatInvoiceDateTime(billDate)}</p>
-          </div>
-          <table class="w-full text-left mt-2 border-collapse font-mono text-[20px] font-bold">
-            <thead>
-              <tr class="border-b-4 border-black uppercase">
-                <th class="py-1 w-10 text-center">#</th>
-                <th class="py-1 w-16 text-center">QTY</th>
-                <th class="py-1">ITEM NAME</th>
-                <th class="py-1 text-right w-20">CODE</th>
-              </tr>
-            </thead>
-            <tbody>
-        `;
-
-        sortedItems.forEach((item, idx) => {
-          karigarHTML += `
-            <tr class="border-b border-stone-300 py-1">
-              <td class="py-1 text-center font-bold">${idx + 1}</td>
-              <td class="py-1 text-center font-black">${Math.round(item.qty || 1)}</td>
-              <td class="py-1 font-black uppercase">${item.name}</td>
-              <td class="py-1 text-right font-mono">${(item.code && item.code !== "—") ? item.code : "—"}</td>
-            </tr>
-          `;
-          if ((idx + 1) % 5 === 0 && idx !== sortedItems.length - 1) {
-            karigarHTML += `<tr><td colSpan="4" class="py-1 border-b-2 border-dotted border-stone-400"></td></tr>`;
-          }
-        });
-
-        karigarHTML += `
-            </tbody>
-          </table>
-          <div class="mt-4 pt-2 border-t-4 border-black text-right font-mono text-[22px] font-black">
-            TOTAL PIECES: ${Math.round(totalPcs)}
-          </div>
-          <div class="mt-8 text-center font-mono text-[16px] font-bold">
-            Checked By Karigar: ____________
-          </div>
-        `;
-
-        const printBody = document.getElementById("printable-bill-invoice");
-        if (printBody) {
-          printBody.innerHTML = karigarHTML;
-          setTimeout(() => window.print(), 150);
-        }
-      };
-
-      const shareBillImage = (items, custName, cityVal, activeDate) => {
-        triggerHaptic(30);
-        const exportContainer = document.getElementById("image-export-container");
-        if (!exportContainer) return;
-
-        const printDateFormatted = formatInvoiceDateTime(activeDate);
-        const printCustomerName = formatCustomerNameJI(custName);
-
-        exportContainer.innerHTML = renderReceiptForSpool(items, printCustomerName, cityVal, printDateFormatted);
-        triggerNotification("Generating shareable receipt image...");
-
-        setTimeout(() => {
-          html2canvas(exportContainer, { scale: 2, useCORS: true, backgroundColor: "#ffffff" })
-            .then(async (canvas) => {
-              canvas.toBlob(async (blob) => {
-                if (!blob) {
-                  triggerNotification("Export failed.");
-                  exportContainer.innerHTML = "";
-                  return;
-                }
-                const fileName = `Bill_${formatDDMM(activeDate).replace('/', '-')}.png`;
-                const file = new File([blob], fileName, { type: 'image/png' });
-
-                if (navigator.canShare && navigator.canShare({ files: [file] })) {
-                  try {
-                    await navigator.share({ files: [file], title: `Bill - ${printCustomerName}`, text: `Receipt for ${printCustomerName}` });
-                    triggerNotification("✓ Shared successfully!");
-                    exportContainer.innerHTML = "";
-                    return;
-                  } catch (e) {}
-                }
-
-                const link = document.createElement("a");
-                link.href = URL.createObjectURL(blob);
-                link.download = fileName;
-                link.click();
-                triggerNotification("✓ Receipt Image Saved!");
-                exportContainer.innerHTML = "";
-              }, 'image/png');
-            })
-            .catch(() => { exportContainer.innerHTML = ""; });
-        }, 100);
-      };
-
-      const handleLogsItemPrint = (logItem) => {
-        triggerHaptic(40);
-        const printBody = document.getElementById("printable-bill-invoice");
-        if (printBody) {
-          const rawDate = getTxnDate(logItem) || logItem.timestamp;
-          printBody.innerHTML = renderReceiptForSpool(parseItemsSafely(getTxnItems(logItem)), getTxnName(logItem), logItem.customerCity || logItem.city, formatInvoiceDateTime(rawDate));
-        }
-        window.print();
-      };
-
-      const toggleLogItemPreview = (billId) => {
-        setVisibleLogPreviews(prev => ({ ...prev, [billId]: !prev[billId] }));
-      };
-
-      const connectBluetoothPrinter = async () => {
-        if (!navigator.bluetooth) {
-          triggerNotification("Web BLE unsupported on this browser.");
-          return;
-        }
-        setBleStatus("Scanning...");
-        try {
-          let device;
-          try {
-            device = await navigator.bluetooth.requestDevice({
-              filters: [
-                { namePrefix: 'Seznik' },
-                { namePrefix: 'Seznik_' },
-                { namePrefix: 'Printer' },
-                { namePrefix: 'POS' }
-              ],
-              optionalServices: ["000018f0-0000-1000-8000-00805f9b34fb", "0000e7e1-0000-1000-8000-00805f9b34fb"]
-            });
-          } catch (filterErr) {
-            device = await navigator.bluetooth.requestDevice({
-              acceptAllDevices: true,
-              optionalServices: ["000018f0-0000-1000-8000-00805f9b34fb", "0000e7e1-0000-1000-8000-00805f9b34fb"]
-            });
-          }
-
-          setBleStatus("Connecting...");
-          const server = await device.gatt.connect();
-          let service;
-          try { service = await server.getPrimaryService("000018f0-0000-1000-8000-00805f9b34fb"); }
-          catch(e) { service = await server.getPrimaryService("0000e7e1-0000-1000-8000-00805f9b34fb"); }
-          const characteristics = await service.getCharacteristics();
-          const writer = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
-          setBleDevice(device); setBleCharacteristic(writer); setBleStatus("Connected");
-          triggerNotification(`BLE Printer Connected (${device.name || 'Printer'})!`);
-        } catch (err) {
-          setBleStatus("Disconnected");
-        }
-      };
-
-      const reconnectBLEPrinterQuietly = async () => {
-        if (!bleDevice) return;
-        try {
-          const server = await bleDevice.gatt.connect();
-          let service;
-          try { service = await server.getPrimaryService("000018f0-0000-1000-8000-00805f9b34fb"); }
-          catch(e) { service = await server.getPrimaryService("0000e7e1-0000-1000-8000-00805f9b34fb"); }
-          const characteristics = await service.getCharacteristics();
-          const writer = characteristics.find(c => c.properties.write || c.properties.writeWithoutResponse);
-          setBleCharacteristic(writer); setBleStatus("Connected");
-        } catch (err) { setBleStatus("Disconnected"); }
-      };
-
-      const handleCatalogDelete = async (name) => {
-        const prodKey = getNormalizedKey(name);
-        addDeletedProductKey(prodKey);
-        try {
-          await window.firebaseBridge.deleteProductFromCloud(name, activeScriptUrl);
-          const updated = cloudProducts.filter(p => getNormalizedKey(p.name) !== prodKey);
-          setCloudProducts(updated); idbStorage.cacheProducts(updated);
-          triggerNotification("✓ Product deleted permanently!");
-        } catch (err) {}
-      };
-
-      const selectParserSuggestion = (prodName, e) => {
-        if (e) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
-        triggerHaptic(30);
-        const trimmed = parserInput.trimStart();
-        const match = trimmed.match(/^(\d+(?:\.\d+)?)\s+(.*)$/);
-        const currentQty = match ? match[1] : "1";
-        setParserInput(`${currentQty} ${prodName} `);
-        if (parserRef.current) parserRef.current.focus();
-      };
-
       // Historic Tab strictly displays ONLY recent 10 bills
       const recent10Bills = useMemo(() => {
         return cloudBills.slice(0, 10);
@@ -1644,9 +661,7 @@
           const custNameLower = getNormalizedKey(getTxnName(b));
           const isWalkIn = ["walk-in customer", "walkin", "", "walk in"].includes(custNameLower);
 
-          if (!includeWalkInInLedger && isWalkIn) {
-            return;
-          }
+          if (!includeWalkInInLedger && isWalkIn) return;
 
           const bId = getTxnId(b);
           const bTime = bId ? Number(bId) : new Date(getTxnDate(b) || 0).getTime();
@@ -1661,7 +676,7 @@
         return { daySum, weekSum, monthSum, quarterSum };
       }, [cloudBills, includeWalkInInLedger]);
 
-      // Filtered Bills by Custom Date Range for Archive Tab Report
+      // Filtered Bills by Custom Date Range
       const customRangeFilteredBills = useMemo(() => {
         let startMs = 0, endMs = Infinity;
         if (reportStartDate) startMs = new Date(reportStartDate).getTime();
@@ -1678,6 +693,8 @@
           return bTime >= startMs && bTime <= endMs;
         });
       }, [cloudBills, reportStartDate, reportEndDate, includeWalkInInLedger]);
+
+      const filteredReportBills = customRangeFilteredBills;
 
       const handleExecuteReportPrintWithCheck = () => {
         if (customRangeFilteredBills.length > 30) {
@@ -2406,18 +1423,16 @@
             {currentTab === "archive" && (
               <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2.5 flex flex-col min-h-0">
                 {!isArchiveUnlocked ? (
-                  /* Protected View: Clean blank passcode input field */
+                  /* Protected View: Completely clean blank background screen with centered passcode input */
                   <div className="flex-grow flex items-center justify-center p-4">
-                    <div className="bg-white border rounded-2xl p-6 shadow-sm max-w-xs w-full text-center space-y-3">
-                      <input 
-                        type="password" 
-                        placeholder="" 
-                        value={archivePassInput}
-                        onChange={(e) => setArchivePassInput(e.target.value)}
-                        onKeyDown={handleArchivePasscodeKeyDown}
-                        className="w-full p-2.5 text-center border-2 border-stone-800 rounded-xl font-mono font-bold text-sm bg-stone-50 focus:bg-white focus:outline-none"
-                      />
-                    </div>
+                    <input 
+                      type="password" 
+                      placeholder="" 
+                      value={archivePassInput}
+                      onChange={(e) => setArchivePassInput(e.target.value)}
+                      onKeyDown={handleArchivePasscodeKeyDown}
+                      className="w-48 p-2.5 text-center border-2 border-stone-800 rounded-xl font-mono font-bold text-sm bg-white shadow-xs focus:outline-none"
+                    />
                   </div>
                 ) : (
                   /* Unlocked Archive View */
