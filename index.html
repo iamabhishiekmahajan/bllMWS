@@ -564,7 +564,6 @@
         return cleaned.slice(0, 4) || "LOCA";
       };
 
-      // Correct Previous Balance calculation excluding current bill ID
       const computeLastBalanceFromTxnsArray = (txnsList, nameVal) => {
         if (!nameVal || !nameVal.trim() || !Array.isArray(txnsList)) return { balance: 0, latestBill: null };
         const targetKey = getNormalizedKey(nameVal);
@@ -572,7 +571,6 @@
 
         txnsList.forEach(t => {
           const tIdStr = String(getTxnId(t));
-          // Exclude current bill if editing/viewing
           if (editingBillId && tIdStr === String(editingBillId)) return;
 
           const tName = getNormalizedKey(getTxnName(t));
@@ -944,7 +942,6 @@
           .sort((a, b) => (counts[getNormalizedKey(b.name)] || 0) - (counts[getNormalizedKey(a.name)] || 0));
       }, [cloudProducts, cloudBills]);
 
-      // Product Sale Qty & Cipher Calculation
       const productSalesStats = useMemo(() => {
         const stats = {};
         cloudBills.forEach(b => {
@@ -978,7 +975,6 @@
         });
       }, [cloudProducts, productSortMode, productSalesStats]);
 
-      // Parser Input Suggestions & Autocomplete
       const parserSuggestionsList = useMemo(() => {
         if (!parserInput.trim()) return [];
         const trimmed = parserInput.trimStart();
@@ -1112,6 +1108,11 @@
         }));
       };
 
+      const handleRemoveBaggedItem = (id) => {
+        triggerHaptic(20);
+        setBaggedItems(prev => prev.filter(i => String(i.id) !== String(id)));
+      };
+
       const applyGroupLessDiscount = (groupKey, lessValStr) => {
         triggerHaptic(30);
         const amt = parseFloat(lessValStr !== undefined && lessValStr !== "" ? lessValStr : "10") || 0;
@@ -1144,7 +1145,6 @@
       const currentBillTotalSum = useMemo(() => baggedItems.reduce((acc, i) => acc + getItemTotalAmount(i), 0), [baggedItems]);
       const grandFinalBalance = useMemo(() => Math.round(currentBillTotalSum + (includeLastBalance ? lastBalanceAmount : 0)), [currentBillTotalSum, includeLastBalance, lastBalanceAmount]);
 
-      // Spool receipt generator: S.No FIRST, then QT, then ITEM, P, AMT, and optional slim checkbox
       const renderReceiptForSpool = (itemsList, custName, cityVal, dateTimeStr) => {
         const safeItems = Array.isArray(itemsList) ? itemsList : [];
         const sortedItems = [...safeItems].sort((a,b) => String(a.name || "").localeCompare(String(b.name || "")));
@@ -1489,7 +1489,6 @@
         } catch (err) {}
       };
 
-      // Product Merge Option Implementation
       const handleMergeProducts = async () => {
         if (!sourceMergeProd || !targetMergeProd || sourceMergeProd === targetMergeProd) {
           triggerNotification("Select different source and target products!");
@@ -1499,13 +1498,11 @@
         const srcKey = getNormalizedKey(sourceMergeProd);
         const tgtFormatted = toTitleCase(targetMergeProd);
 
-        // Delete source product from catalog
         addDeletedProductKey(srcKey);
         const updatedProds = cloudProducts.filter(p => getNormalizedKey(p.name) !== srcKey);
         setCloudProducts(updatedProds);
         idbStorage.cacheProducts(updatedProds);
 
-        // Replace product name in all cloud bills locally & update draft
         setCloudBills(prev => prev.map(b => {
           const items = parseItemsSafely(getTxnItems(b));
           let modified = false;
@@ -1546,18 +1543,15 @@
         if (parserRef.current) parserRef.current.focus();
       };
 
-      // Historic Tab strictly displays ONLY recent 10 bills
       const recent10Bills = useMemo(() => {
         return cloudBills.slice(0, 10);
       }, [cloudBills]);
 
-      // Custom Date Filter & Walk-In Filtered Ledger Bills
       const filteredLedgerBills = useMemo(() => {
         if (!cloudBills || !Array.isArray(cloudBills)) return [];
         
         let list = [...cloudBills];
 
-        // Walk-in customer filter
         if (!includeWalkInInLedger) {
           list = list.filter(b => {
             const nameLower = getNormalizedKey(getTxnName(b));
@@ -1565,13 +1559,11 @@
           });
         }
 
-        // Search query filter
         if (ledgerSearchQuery.trim()) {
           const q = ledgerSearchQuery.trim().toLowerCase();
           list = list.filter(b => getTxnName(b).toLowerCase().includes(q));
         }
 
-        // Preset / Custom Date filter
         const now = Date.now();
         if (ledgerDatePreset === "today") {
           const todayStr = getTodayDateStr();
@@ -1608,7 +1600,6 @@
         return list;
       }, [cloudBills, includeWalkInInLedger, ledgerSearchQuery, ledgerDatePreset, ledgerFromDate, ledgerToDate]);
 
-      // Calculate Summary Totals
       const ledgerSummaryTotals = useMemo(() => {
         const now = Date.now();
         const startOfToday = new Date();
@@ -1661,7 +1652,6 @@
         } catch (err) {}
       };
 
-      // Thermal Bluetooth ESC/POS Direct Printer Formatting
       const printBLEThermalDirectly = async (itemsList, custName, cityVal, activeDate) => {
         if (!bleCharacteristic) return;
         const encoder = new TextEncoder();
@@ -1729,7 +1719,6 @@
         }
       };
 
-      // Print Summary Report for Date Range
       const handlePrintSummaryReport = () => {
         triggerHaptic(40);
         if (filteredLedgerBills.length === 0) {
@@ -1984,7 +1973,7 @@
                 className="w-11 px-1 h-9 text-xs bg-stone-50 border rounded-lg text-center focus:outline-none focus:bg-white font-bold uppercase flex-shrink-0"
               />
               
-              {/* X% Input (Value only - X% label not printed) */}
+              {/* X% Input */}
               <div className="flex items-center gap-0.5 flex-shrink-0">
                 <input 
                   type="number" 
@@ -1997,7 +1986,7 @@
                 />
               </div>
 
-              {/* Bluetooth Button placed BEFORE Lb button */}
+              {/* Bluetooth Button */}
               <button type="button" onClick={connectBluetoothPrinter} className={`px-2 h-9 rounded-lg text-[8px] font-black tracking-wider flex items-center gap-0.5 transition-colors flex-shrink-0 active:scale-95 ${bleStatus.includes('Connected') ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-600 border'}`}>
                 <i className="fa-brands fa-bluetooth text-sm"></i> {bleStatus.includes('Connected') ? 'ON':'OFF'}
               </button>
@@ -2034,10 +2023,11 @@
 
           <main className="flex-grow flex-1 min-h-0 max-w-md w-full mx-auto p-1.5 flex flex-col gap-1.5 overflow-hidden bg-stone-50 no-print">
             
+            {/* BILL DRAFT TAB */}
             {currentTab === "bill" && (
               <div className="flex-grow flex flex-col gap-1.5 overflow-hidden min-h-0">
                 
-                {/* Directory Shortcuts & Worker / Karigar Slips */}
+                {/* Directory Shortcuts & Slips */}
                 <div className="bg-white p-2 border rounded-xl shadow-xs flex-shrink-0">
                   <div className="flex justify-between items-center mb-1 gap-1">
                     <span className="text-[8px] font-black text-stone-400 uppercase tracking-wider">Shortcuts</span>
@@ -2065,7 +2055,7 @@
                   </div>
                 </div>
 
-                {/* Fast Parser Entry Box with Live Suggestions */}
+                {/* Fast Parser Entry Box */}
                 <div className="bg-white p-1.5 border rounded-xl shadow-xs relative flex-shrink-0 z-30">
                   <form onSubmit={handleParserSubmit} className="flex gap-1.5 items-center">
                     <div className="relative flex-grow">
@@ -2123,517 +2113,521 @@
                 </div>
 
                 {/* BAGGED ITEMS LIST */}
-                <div ref={baggedListRef} className="flex-grow overflow-y-auto custom-scroll space-y-2 pr-0.5 min-h-0 flex-1">
-                  
-                  {baggedItems.length === 0 ? (
-                    <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border border-dashed shadow-xs">
-                      Bag is empty. Enter items above (e.g. <span className="font-mono text-stone-600">5 chura 120no</span> or <span className="font-mono text-stone-600">120n</span>) & press Enter.
+                <div ref={baggedListRef} className="flex-grow overflow-y-auto custom-scroll space-y-2 pr-0.5">
+                  {groupedBaggedItems.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-stone-400 text-center p-6 border-2 border-dashed border-stone-200 rounded-2xl">
+                      <i className="fa-solid fa-basket-shopping text-3xl mb-2 opacity-50"></i>
+                      <p className="text-xs font-bold uppercase">No draft items added</p>
+                      <p className="text-[10px] text-stone-400 mt-1">Use shortcuts or fast parser input to add items.</p>
                     </div>
                   ) : (
-                    <>
-                      {groupedBaggedItems.map(group => {
-                        const defaultGroupLessVal = groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "10";
+                    groupedBaggedItems.map(group => (
+                      <div key={group.key} className="bg-white border border-stone-200 rounded-xl p-2 shadow-xs space-y-1.5">
+                        
+                        {/* Group Header */}
+                        <div className="flex justify-between items-center bg-stone-100 p-1.5 rounded-lg border border-stone-200">
+                          <span className="font-black text-xs uppercase text-stone-900 tracking-wider flex items-center gap-1">
+                            <i className="fa-solid fa-box text-amber-500 text-[10px]"></i> {group.displayName}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono font-extrabold bg-stone-200 px-1.5 py-0.5 rounded text-stone-800">
+                              Qty: {group.totalQty}
+                            </span>
+                            <div className="flex items-center gap-1 bg-white border border-stone-300 rounded-md px-1">
+                              <span className="text-[9px] font-black text-stone-500">Less:</span>
+                              <input 
+                                type="number" 
+                                placeholder="10"
+                                value={groupLessInputs[group.key] !== undefined ? groupLessInputs[group.key] : "10"}
+                                onChange={e => setGroupLessInputs(prev => ({ ...prev, [group.key]: e.target.value }))}
+                                className="w-8 text-[11px] font-mono font-bold text-center focus:outline-none"
+                              />
+                              <button 
+                                type="button" 
+                                onClick={() => applyGroupLessDiscount(group.key, groupLessInputs[group.key] || "10")}
+                                className="text-[9px] bg-amber-500 text-stone-950 font-black px-1.5 py-0.5 rounded active:scale-95"
+                              >
+                                Apply
+                              </button>
+                            </div>
+                          </div>
+                        </div>
 
-                        return (
-                          <div key={group.key} className="bg-white border-2 border-stone-300 rounded-xl p-1.5 space-y-1 shadow-xs animate-slide-up">
-                            
-                            {/* Clean & Slim Header ("gana") */}
-                            <div className="bg-stone-800 text-white px-2 py-0.5 rounded-md flex items-center justify-between text-[11px] font-bold shadow-xs">
-                              <div className="flex items-center gap-1.5 min-w-0 flex-shrink truncate">
-                                <span className="font-black uppercase tracking-wider text-amber-300 truncate">{group.displayName}</span>
-                                <span className="text-[9px] bg-amber-400 text-stone-950 font-mono font-black px-1 rounded flex-shrink-0">
-                                  Q: {group.totalQty}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-1 flex-shrink-0">
-                                <span className="text-[8px] font-black text-stone-300 uppercase">Less:</span>
+                        {/* Items in Group */}
+                        <div className="space-y-1 divide-y divide-stone-100">
+                          {group.items.map((item) => (
+                            <div key={item.id} className="pt-1 flex items-center justify-between text-xs gap-1">
+                              <div className="flex items-center gap-1 flex-1 min-w-0">
                                 <input 
                                   type="number" 
-                                  inputMode="decimal"
-                                  placeholder="10" 
-                                  value={defaultGroupLessVal} 
-                                  onChange={(e) => setGroupLessInputs({ ...groupLessInputs, [group.key]: e.target.value })}
-                                  onFocus={(e) => e.target.select()}
-                                  className="w-9 px-1 py-0 text-xs text-stone-950 bg-white rounded font-mono font-bold text-center focus:outline-none h-6 border border-amber-300"
+                                  value={item.qty}
+                                  onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)}
+                                  className="w-10 p-1 border rounded text-center font-mono font-black text-xs bg-stone-50"
                                 />
-                                <button 
-                                  type="button" 
-                                  onClick={() => applyGroupLessDiscount(group.key, defaultGroupLessVal)} 
-                                  className="px-1.5 py-0 bg-amber-500 hover:bg-amber-600 text-stone-950 text-[9px] font-black uppercase rounded h-6 active:scale-95"
-                                >
-                                  Apply
+                                <input 
+                                  type="text" 
+                                  value={item.name}
+                                  onChange={e => handleEditBaggedItem(item.id, 'name', e.target.value)}
+                                  className="flex-1 p-1 border rounded font-bold uppercase text-xs truncate bg-stone-50"
+                                />
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <input 
+                                  type="text" 
+                                  placeholder="Code"
+                                  value={item.code !== "—" ? item.code : ""}
+                                  onChange={e => handleEditBaggedItem(item.id, 'code', e.target.value)}
+                                  className="w-12 p-1 border rounded text-center font-mono text-[10px] bg-stone-50 uppercase"
+                                />
+                                <input 
+                                  type="number" 
+                                  placeholder="Base"
+                                  value={item.basePrice || ""}
+                                  onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)}
+                                  className="w-12 p-1 border rounded text-center font-mono font-bold text-xs bg-stone-50"
+                                />
+                                <input 
+                                  type="number" 
+                                  placeholder="-Less"
+                                  value={item.less !== "0" ? item.less : ""}
+                                  onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)}
+                                  className="w-10 p-1 border rounded text-center font-mono text-[10px] text-rose-600 bg-rose-50"
+                                />
+                                <span className="w-14 text-right font-mono font-black text-xs text-stone-900">
+                                  ₹{Math.round(getItemTotalAmount(item))}
+                                </span>
+                                <button type="button" onClick={() => handleRemoveBaggedItem(item.id)} className="w-6 h-6 text-rose-500 hover:text-rose-700 flex items-center justify-center active:scale-95">
+                                  <i className="fa-solid fa-xmark"></i>
                                 </button>
                               </div>
                             </div>
-
-                            <div className="space-y-1 divide-y divide-stone-100">
-                              {group.items.map(item => (
-                                <div key={item.id} className="pt-1 flex items-center justify-between gap-1 text-xs font-mono bg-stone-50 p-1.5 rounded-lg border border-stone-200 flex-nowrap overflow-hidden">
-                                  
-                                  <div className="flex items-center gap-1 font-mono flex-nowrap flex-grow min-w-0">
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
-                                      <span className="text-[8px] font-black text-stone-400 uppercase">Q:</span>
-                                      <input 
-                                        type="number" 
-                                        inputMode="decimal"
-                                        value={item.qty} 
-                                        onChange={e => handleEditBaggedItem(item.id, 'qty', e.target.value)} 
-                                        onFocus={(e) => e.target.select()}
-                                        className="w-6 text-center font-black bg-transparent focus:outline-none text-xs"
-                                      />
-                                    </div>
-
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
-                                      <span className="text-[8px] font-black text-stone-400 uppercase">C:</span>
-                                      <input 
-                                        type="text" 
-                                        autoCapitalize="characters"
-                                        placeholder="CODE"
-                                        value={item.code === "—" ? "" : item.code} 
-                                        onChange={e => handleEditBaggedItem(item.id, 'code', e.target.value)} 
-                                        onFocus={(e) => e.target.select()}
-                                        className="w-11 text-center font-bold text-indigo-700 bg-transparent focus:outline-none uppercase text-xs"
-                                      />
-                                    </div>
-
-                                    <div className="flex items-center gap-0.5 bg-white border border-stone-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
-                                      <span className="text-[8px] font-black text-stone-400 uppercase">P:</span>
-                                      <input 
-                                        type="number" 
-                                        inputMode="decimal"
-                                        value={Math.round(item.basePrice)} 
-                                        onChange={e => handleEditBaggedItem(item.id, 'basePrice', e.target.value)} 
-                                        onFocus={(e) => e.target.select()}
-                                        className="w-10 text-center font-bold text-stone-800 bg-transparent focus:outline-none text-xs"
-                                      />
-                                    </div>
-
-                                    <div className="flex items-center gap-0.5 bg-rose-50 border border-rose-300 px-1 py-0.5 rounded-lg h-9 flex-shrink-0">
-                                      <span className="text-[8px] font-black text-rose-500 uppercase">L:</span>
-                                      <input 
-                                        type="text" 
-                                        inputMode="decimal"
-                                        placeholder="0" 
-                                        value={item.less === "—" ? "" : item.less} 
-                                        onChange={e => handleEditBaggedItem(item.id, 'less', e.target.value)} 
-                                        onFocus={(e) => e.target.select()}
-                                        className="w-6 text-center font-bold text-rose-700 bg-transparent focus:outline-none text-xs"
-                                      />
-                                    </div>
-
-                                    <div className="flex-grow text-right font-black text-stone-900 text-xs whitespace-nowrap px-1">
-                                      ₹{Math.round(getItemTotalAmount(item))}
-                                    </div>
-                                  </div>
-
-                                  <button type="button" onClick={() => setBaggedItems(prev => prev.filter(i => String(i.id) !== String(item.id)))} className="text-stone-400 hover:text-rose-600 px-1.5 text-base flex-shrink-0 h-9 w-8 flex items-center justify-center active:scale-95">
-                                    <i className="fa-solid fa-xmark"></i>
-                                  </button>
-
-                                </div>
-                              ))}
-                            </div>
-
-                          </div>
-                        );
-                      })}
-
-                      <div className="bg-white p-2.5 border rounded-xl space-y-1 shadow-xs font-sans text-xs">
-                        <div className="flex justify-between items-center text-stone-600 font-bold">
-                          <span>Current Bill Amount:</span>
-                          <span className="font-mono text-sm font-black text-stone-900">₹{Math.round(currentBillTotalSum)}</span>
+                          ))}
                         </div>
 
-                        {includeLastBalance && (
-                          <div className="flex justify-between items-center text-amber-900 bg-amber-50 p-1.5 rounded-lg border border-amber-200 font-bold">
-                            <span className="flex items-center gap-1">
-                              <span>Lb (Previous Balance):</span>
-                              {isFetchingLastBalance && <i className="fa-solid fa-spinner fa-spin text-amber-600"></i>}
-                            </span>
-                            <span className="font-mono font-black text-amber-800">₹{Math.round(lastBalanceAmount)}</span>
-                          </div>
-                        )}
-
-                        <div className="flex justify-between items-center pt-1 border-t-2 border-stone-900 font-black text-stone-950">
-                          <span className="uppercase tracking-wider">TOTAL:</span>
-                          <span className="font-mono text-base text-amber-600 font-black">₹{grandFinalBalance}</span>
-                        </div>
                       </div>
-                    </>
+                    ))
                   )}
-
                 </div>
-              </div>
-            )}
 
-            {currentTab === "products" && (
-              <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
-                
-                {/* Add Product & Merge Product Bar */}
-                <div className="bg-white p-2.5 border rounded-xl space-y-2 flex-shrink-0 shadow-xs">
-                  <form onSubmit={handleProductAddSubmit} className="space-y-1.5">
-                    <span className="block text-[9px] font-black text-stone-400 uppercase tracking-wider">Add New Product</span>
-                    <div className="flex gap-1.5">
-                      <input 
-                        type="text" 
-                        required 
-                        placeholder="Product Name..." 
-                        value={newProdName} 
-                        onChange={e => setNewProdNameState(e.target.value)} 
-                        className="flex-grow px-3 h-10 text-xs border rounded-lg font-bold bg-stone-50 focus:bg-white"
-                      />
-                      <button type="submit" className="px-3 h-10 bg-stone-900 text-white rounded-lg text-xs font-black uppercase active:scale-95">Add</button>
+                {/* BILL TOTAL SUMMARY FOOTER */}
+                {baggedItems.length > 0 && (
+                  <div className="bg-stone-900 text-white p-2.5 rounded-xl shadow-lg flex-shrink-0 space-y-1.5 border border-stone-800">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-stone-400 font-bold uppercase">Items Draft Total:</span>
+                      <span className="font-mono font-black text-amber-400">₹{Math.round(currentBillTotalSum)}</span>
                     </div>
-                  </form>
 
-                  <div className="pt-2 border-t flex justify-between items-center">
-                    <button type="button" onClick={() => setShowMergeModal(true)} className="text-xs bg-amber-100 hover:bg-amber-200 text-amber-900 font-extrabold px-3 py-1.5 rounded-lg border border-amber-300 flex items-center gap-1.5 active:scale-95">
-                      <i className="fa-solid fa-code-merge"></i> Merge Product Spelling
-                    </button>
+                    {includeLastBalance && (
+                      <div className="flex justify-between items-center text-xs border-t border-stone-800 pt-1">
+                        <span className="text-stone-400 font-bold uppercase flex items-center gap-1">
+                          Previous Balance (Lb):
+                          {lastBilledInfo?.display && <span className="text-[9px] bg-stone-800 text-stone-300 px-1 rounded font-mono">{lastBilledInfo.display}</span>}
+                        </span>
+                        <span className="font-mono font-bold text-stone-300">₹{Math.round(lastBalanceAmount)}</span>
+                      </div>
+                    )}
 
-                    {/* Sorting Toggle */}
-                    <div className="flex items-center gap-1 bg-stone-100 p-1 rounded-lg">
-                      <button type="button" onClick={() => setProductSortMode("qty")} className={`px-2 py-0.5 text-[10px] font-black rounded ${productSortMode === 'qty' ? 'bg-stone-900 text-white' : 'text-stone-600'}`}>
-                        Qty Sold
+                    <div className="flex justify-between items-center text-sm border-t border-stone-700 pt-1.5">
+                      <span className="font-black uppercase tracking-wider text-amber-500">Grand Total:</span>
+                      <span className="font-mono font-black text-lg text-emerald-400">₹{grandFinalBalance}</span>
+                    </div>
+
+                    <div className="flex gap-2 pt-1">
+                      <button type="button" onClick={() => setShowNewBillConfirmModal(true)} className="flex-1 py-2 bg-stone-800 hover:bg-stone-700 text-stone-300 rounded-lg text-xs font-black uppercase active:scale-95 transition-all">
+                        Clear Draft
                       </button>
-                      <button type="button" onClick={() => setProductSortMode("alpha")} className={`px-2 py-0.5 text-[10px] font-black rounded ${productSortMode === 'alpha' ? 'bg-stone-900 text-white' : 'text-stone-600'}`}>
-                        A-Z
+                      <button type="button" onClick={handleGenerateAndPrintBill} className="flex-2 py-2 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-lg text-xs font-black uppercase tracking-wider active:scale-95 transition-all flex items-center justify-center gap-1.5 shadow-md">
+                        <i className="fa-solid fa-print"></i> Print Receipt
                       </button>
                     </div>
-                  </div>
-                </div>
-
-                {/* Master Product Directory List with Sale in Cipher */}
-                <div className="bg-white border rounded-xl p-2 space-y-1.5 shadow-xs">
-                  <div className="text-[10px] font-black text-stone-400 uppercase tracking-wider px-1">Master Directory ({sortedProductsList.length} items)</div>
-                  <div className="divide-y divide-stone-100">
-                    {sortedProductsList.map(prod => {
-                      const prodKey = getNormalizedKey(prod.name);
-                      const stats = productSalesStats[prodKey] || { qty: 0, amount: 0 };
-                      const cipherSales = encodeCustomCipher(stats.amount);
-
-                      return (
-                        <div key={prod.id || prod.name} className="py-2 px-2 flex justify-between items-center text-xs hover:bg-stone-50 rounded-lg transition-colors">
-                          <div className="min-w-0 pr-2">
-                            <div className="font-extrabold uppercase text-stone-900 truncate">{prod.name}</div>
-                            <div className="text-[10px] font-mono text-stone-500 flex items-center gap-2 mt-0.5">
-                              <span>Sold Qty: <strong className="text-stone-900">{stats.qty}</strong></span>
-                              <span>•</span>
-                              <span>Cipher Amt: <strong className="text-amber-700">{cipherSales}</strong></span>
-                            </div>
-                          </div>
-                          <button type="button" onClick={() => handleCatalogDelete(prod.name)} className="text-stone-300 hover:text-rose-600 p-1.5 active:scale-95">
-                            <i className="fa-solid fa-trash-can"></i>
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-              </div>
-            )}
-
-            {currentTab === "historic" && (
-              <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
-                
-                <div className="bg-white p-2.5 border rounded-xl shadow-xs font-sans">
-                  <div className="text-xs font-black uppercase text-stone-900 tracking-wider">Recent 10 Historic Bills</div>
-                  <div className="text-[10px] text-stone-400 mt-0.5">Showing last 10 bills generated across sessions</div>
-                </div>
-
-                {recent10Bills.length === 0 ? (
-                  <div className="p-8 text-center text-xs text-stone-400 italic bg-white rounded-xl border border-dashed">
-                    No historic bills recorded yet.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {recent10Bills.map((bill) => {
-                      const bId = getTxnId(bill);
-                      const bName = getTxnName(bill);
-                      const bCity = bill.customerCity || bill.city || "";
-                      const bAmt = getTxnAmount(bill);
-                      const rawDate = getTxnDate(bill) || bill.timestamp;
-                      const bDateFormatted = formatDDMM(rawDate);
-                      const items = parseItemsSafely(getTxnItems(bill));
-                      const isPreviewOpen = visibleLogPreviews[bId];
-
-                      return (
-                        <div key={bId} className="bg-white border-2 border-stone-200 rounded-xl p-2.5 space-y-2 shadow-xs animate-slide-up">
-                          <div className="flex justify-between items-start gap-2">
-                            <div>
-                              <div className="font-black text-xs uppercase text-stone-950">{formatCustomerNameJI(bName)}</div>
-                              <div className="text-[10px] font-mono text-stone-500 mt-0.5 flex items-center gap-1.5">
-                                <span>#{bId}</span>
-                                <span>•</span>
-                                <span>{bDateFormatted}</span>
-                                {bCity && <span className="bg-stone-100 px-1 py-0.2 text-stone-700 rounded font-black uppercase">{getCityCode(bCity)}</span>}
-                              </div>
-                            </div>
-
-                            <div className="text-right">
-                              <div className="font-mono text-sm font-black text-stone-900">₹{Math.round(bAmt)}</div>
-                              <div className="text-[9px] text-stone-400 font-bold">{items.length} item(s)</div>
-                            </div>
-                          </div>
-
-                          <div className="flex gap-1.5 pt-1 border-t border-stone-100">
-                            <button type="button" onClick={() => handleLogsItemPrint(bill)} className="px-2.5 py-1.5 bg-stone-900 text-white rounded-lg text-[10px] font-black uppercase active:scale-95 flex items-center gap-1">
-                              <i className="fa-solid fa-print"></i> Print
-                            </button>
-                            <button type="button" onClick={() => handleLoadHistoricalBill(bill)} className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-stone-950 rounded-lg text-[10px] font-black uppercase active:scale-95 flex items-center gap-1">
-                              <i className="fa-solid fa-file-pen"></i> Edit Draft
-                            </button>
-                            <button type="button" onClick={() => toggleLogItemPreview(bId)} className="px-2.5 py-1.5 bg-stone-100 text-stone-700 rounded-lg text-[10px] font-bold uppercase active:scale-95">
-                              {isPreviewOpen ? 'Hide' : 'Items'}
-                            </button>
-                            <button type="button" onClick={() => setBillToDelete(bill)} className="px-2 py-1.5 text-stone-400 hover:text-rose-600 ml-auto active:scale-95">
-                              <i className="fa-solid fa-trash-can"></i>
-                            </button>
-                          </div>
-
-                          {isPreviewOpen && (
-                            <div className="mt-2 p-2 bg-stone-50 rounded-lg border text-xs font-mono space-y-1 animate-slide-up">
-                              {items.map((i, idx) => (
-                                <div key={idx} className="flex justify-between text-stone-800">
-                                  <span>{Math.round(i.qty || 1)}x {i.name}</span>
-                                  <span>₹{Math.round(getItemTotalAmount(i))}</span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
                   </div>
                 )}
 
               </div>
             )}
 
+            {/* HISTORY / RECENT BILLS TAB */}
+            {currentTab === "history" && (
+              <div className="flex-grow flex flex-col gap-2 overflow-hidden min-h-0">
+                <div className="bg-white p-2 border rounded-xl shadow-xs flex justify-between items-center flex-shrink-0">
+                  <h2 className="font-black text-xs uppercase tracking-wider text-stone-800 flex items-center gap-1.5">
+                    <i className="fa-solid fa-clock-rotate-left text-amber-500"></i> Recent 10 Saved Bills
+                  </h2>
+                  <span className="text-[10px] font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">
+                    Last 10 Records
+                  </span>
+                </div>
+
+                <div className="flex-grow overflow-y-auto custom-scroll space-y-2 pr-0.5">
+                  {recent10Bills.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-stone-400 text-center p-6 border-2 border-dashed rounded-2xl">
+                      <i className="fa-solid fa-receipt text-3xl mb-2 opacity-50"></i>
+                      <p className="text-xs font-bold uppercase">No recent bills found</p>
+                    </div>
+                  ) : (
+                    recent10Bills.map((bill) => {
+                      const bId = getTxnId(bill);
+                      const bName = getTxnName(bill);
+                      const bCity = bill.customerCity || bill.city;
+                      const bAmt = getTxnAmount(bill);
+                      const bDate = formatDDMM(getTxnDate(bill));
+
+                      return (
+                        <div key={bId} className="bg-white border rounded-xl p-2.5 shadow-xs space-y-2">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="font-black text-xs uppercase text-stone-900">
+                                {formatCustomerNameJI(bName)}
+                              </div>
+                              <div className="text-[10px] text-stone-500 font-mono mt-0.5 flex items-center gap-2">
+                                <span>#{bId}</span>
+                                <span>• {bDate}</span>
+                                {bCity && <span className="bg-stone-100 px-1 rounded uppercase">{getCityCode(bCity)}</span>}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-mono font-black text-sm text-stone-900">₹{Math.round(bAmt)}</div>
+                              <span className="text-[9px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded uppercase">Saved</span>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-1.5 pt-1 border-t border-stone-100">
+                            <button type="button" onClick={() => handleLoadHistoricalBill(bill)} className="flex-1 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-[10px] font-black uppercase active:scale-95">
+                              <i className="fa-solid fa-pen-to-square"></i> Load Draft
+                            </button>
+                            <button type="button" onClick={() => handleLogsItemPrint(bill)} className="flex-1 py-1.5 bg-stone-900 hover:bg-black text-white rounded-lg text-[10px] font-black uppercase active:scale-95">
+                              <i className="fa-solid fa-print"></i> Print
+                            </button>
+                            <button type="button" onClick={() => toggleLogItemPreview(bId)} className="p-1.5 bg-stone-100 text-stone-700 rounded-lg text-[10px] font-bold active:scale-95">
+                              <i className={`fa-solid ${visibleLogPreviews[bId] ? 'fa-chevron-up' : 'fa-chevron-down'}`}></i>
+                            </button>
+                            <button type="button" onClick={() => setBillToDelete(bill)} className="p-1.5 bg-rose-50 text-rose-600 rounded-lg text-[10px] font-bold active:scale-95">
+                              <i className="fa-solid fa-trash"></i>
+                            </button>
+                          </div>
+
+                          {/* Expandable Item Preview */}
+                          {visibleLogPreviews[bId] && (
+                            <div className="bg-stone-50 p-2 rounded-lg border border-stone-200 text-xs font-mono space-y-1">
+                              {parseItemsSafely(getTxnItems(bill)).map((item, idx) => (
+                                <div key={idx} className="flex justify-between text-[11px] border-b border-stone-200 pb-0.5">
+                                  <span className="font-bold uppercase">{Math.round(item.qty || 1)}x {item.name}</span>
+                                  <span>₹{Math.round(getItemTotalAmount(item))}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* SALES LEDGER & REPORTS TAB */}
             {currentTab === "ledger" && (
-              <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2">
-                
-                {/* Ledger & Custom Range Controls */}
-                <div className="bg-white p-3 border rounded-xl space-y-2.5 shadow-xs">
+              <div className="flex-grow flex flex-col gap-2 overflow-hidden min-h-0">
+                <div className="bg-white p-2.5 border rounded-xl shadow-xs space-y-2 flex-shrink-0">
                   <div className="flex justify-between items-center">
-                    <span className="text-xs font-black uppercase tracking-wider text-stone-900">Sales Ledger & Range Summary</span>
-                    <button type="button" onClick={handlePrintSummaryReport} className="px-3 py-1 bg-stone-900 text-white rounded-lg text-xs font-black uppercase active:scale-95 flex items-center gap-1">
+                    <h2 className="font-black text-xs uppercase tracking-wider text-stone-800 flex items-center gap-1.5">
+                      <i className="fa-solid fa-chart-line text-amber-500"></i> Sales Ledger & Reports
+                    </h2>
+                    <button type="button" onClick={handlePrintSummaryReport} className="text-[10px] bg-stone-900 text-white font-black px-2.5 py-1 rounded-lg uppercase active:scale-95">
                       <i className="fa-solid fa-print"></i> Print Report
                     </button>
                   </div>
 
-                  {/* High Visibility Toggle Switches */}
-                  <div className="grid grid-cols-1 gap-2 pt-1 border-t">
-                    <label className="flex items-center justify-between p-2 bg-stone-50 border rounded-xl cursor-pointer">
-                      <span className="text-xs font-extrabold text-stone-900">Include Walk-In Customers</span>
-                      <button 
-                        type="button" 
-                        onClick={() => setIncludeWalkInInLedger(!includeWalkInInLedger)}
-                        className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors ${includeWalkInInLedger ? 'bg-emerald-600' : 'bg-stone-300'}`}
-                      >
-                        <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${includeWalkInInLedger ? 'translate-x-6' : ''}`}></div>
-                      </button>
-                    </label>
-
-                    <label className="flex items-center justify-between p-2 bg-stone-50 border rounded-xl cursor-pointer">
-                      <span className="text-xs font-extrabold text-stone-900">Slim Checkbox on Printed Slip</span>
-                      <button 
-                        type="button" 
-                        onClick={() => setPrintSettings({ ...printSettings, showSlimCheckbox: !printSettings.showSlimCheckbox })}
-                        className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors ${printSettings.showSlimCheckbox ? 'bg-emerald-600' : 'bg-stone-300'}`}
-                      >
-                        <div className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${printSettings.showSlimCheckbox ? 'translate-x-6' : ''}`}></div>
-                      </button>
+                  {/* Search and Filters */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <input 
+                      type="text" 
+                      placeholder="Filter customer..."
+                      value={ledgerSearchQuery}
+                      onChange={e => setLedgerSearchQuery(e.target.value)}
+                      className="p-1.5 text-xs bg-stone-50 border rounded-lg font-bold"
+                    />
+                    <label className="flex items-center gap-1 text-[10px] font-bold text-stone-700 bg-stone-50 border p-1 rounded-lg cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={includeWalkInInLedger} 
+                        onChange={e => setIncludeWalkInInLedger(e.target.checked)}
+                        className="rounded text-amber-600 focus:ring-0"
+                      />
+                      <span>Include Walk-Ins</span>
                     </label>
                   </div>
 
-                  {/* Preset & Custom Range Selection */}
-                  <div className="space-y-1.5 pt-1 border-t">
-                    <span className="text-[10px] font-black text-stone-400 uppercase">Select Date Range Filter:</span>
-                    <div className="grid grid-cols-4 gap-1">
-                      {['all', 'today', '7days', '30days'].map(preset => (
-                        <button 
-                          key={preset} 
-                          type="button" 
-                          onClick={() => setLedgerDatePreset(preset)} 
-                          className={`py-1.5 text-[10px] font-black uppercase rounded-lg border active:scale-95 ${ledgerDatePreset === preset ? 'bg-stone-900 text-white border-stone-900' : 'bg-stone-50 text-stone-700'}`}
-                        >
-                          {preset}
-                        </button>
-                      ))}
-                    </div>
+                  {/* Preset Buttons */}
+                  <div className="flex gap-1 overflow-x-auto pb-0.5 custom-scroll">
+                    {["all", "today", "7days", "30days", "custom"].map(preset => (
+                      <button 
+                        key={preset}
+                        type="button" 
+                        onClick={() => setLedgerDatePreset(preset)}
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase whitespace-nowrap active:scale-95 ${ledgerDatePreset === preset ? 'bg-amber-500 text-stone-950' : 'bg-stone-100 text-stone-600 border'}`}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
 
+                  {/* Custom Date Inputs */}
+                  {ledgerDatePreset === "custom" && (
                     <div className="flex gap-1.5 pt-1">
-                      <input 
-                        type="date" 
-                        value={ledgerFromDate} 
-                        onChange={(e) => { setLedgerFromDate(e.target.value); setLedgerDatePreset("custom"); }} 
-                        className="flex-1 px-2 py-1 text-xs border rounded-lg font-bold bg-stone-50"
-                      />
-                      <span className="text-xs font-bold text-stone-400 self-center">to</span>
-                      <input 
-                        type="date" 
-                        value={ledgerToDate} 
-                        onChange={(e) => { setLedgerToDate(e.target.value); setLedgerDatePreset("custom"); }} 
-                        className="flex-1 px-2 py-1 text-xs border rounded-lg font-bold bg-stone-50"
-                      />
+                      <input type="date" value={ledgerFromDate} onChange={e => setLedgerFromDate(e.target.value)} className="p-1 border rounded text-xs flex-1" />
+                      <input type="date" value={ledgerToDate} onChange={e => setLedgerToDate(e.target.value)} className="p-1 border rounded text-xs flex-1" />
+                    </div>
+                  )}
+
+                  {/* Summary Totals Cards */}
+                  <div className="grid grid-cols-4 gap-1 text-center font-mono pt-1">
+                    <div className="bg-stone-100 p-1 rounded border">
+                      <div className="text-[8px] text-stone-500 font-sans font-bold">TODAY</div>
+                      <div className="text-[11px] font-black text-stone-900">₹{Math.round(ledgerSummaryTotals.daySum)}</div>
+                    </div>
+                    <div className="bg-stone-100 p-1 rounded border">
+                      <div className="text-[8px] text-stone-500 font-sans font-bold">7 DAYS</div>
+                      <div className="text-[11px] font-black text-stone-900">₹{Math.round(ledgerSummaryTotals.weekSum)}</div>
+                    </div>
+                    <div className="bg-stone-100 p-1 rounded border">
+                      <div className="text-[8px] text-stone-500 font-sans font-bold">30 DAYS</div>
+                      <div className="text-[11px] font-black text-stone-900">₹{Math.round(ledgerSummaryTotals.monthSum)}</div>
+                    </div>
+                    <div className="bg-amber-100 p-1 rounded border border-amber-300">
+                      <div className="text-[8px] text-amber-800 font-sans font-bold">RANGE</div>
+                      <div className="text-[11px] font-black text-amber-950">₹{Math.round(ledgerSummaryTotals.rangeSum)}</div>
                     </div>
                   </div>
-
-                  <input 
-                    type="text" 
-                    placeholder="Search Customer in Ledger..." 
-                    value={ledgerSearchQuery} 
-                    onChange={e => setLedgerSearchQuery(e.target.value)} 
-                    className="w-full px-3 py-1.5 text-xs border rounded-lg font-bold bg-stone-50"
-                  />
                 </div>
 
-                {/* Summary Metrics Cards */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="bg-white p-2.5 border rounded-xl shadow-xs">
-                    <div className="text-[9px] font-black text-stone-400 uppercase">Today's Total</div>
-                    <div className="text-base font-black text-stone-900 font-mono mt-0.5">₹{Math.round(ledgerSummaryTotals.daySum)}</div>
-                  </div>
-                  <div className="bg-white p-2.5 border rounded-xl shadow-xs">
-                    <div className="text-[9px] font-black text-stone-400 uppercase">Filtered Range Revenue</div>
-                    <div className="text-base font-black text-amber-600 font-mono mt-0.5">₹{Math.round(ledgerSummaryTotals.rangeSum)}</div>
-                  </div>
-                </div>
-
-                {/* Filtered Bills Listing */}
-                <div className="bg-white border rounded-xl p-2 space-y-1.5 shadow-xs">
-                  <div className="text-[10px] font-black text-stone-400 uppercase px-1">Bills in Selected Range ({filteredLedgerBills.length})</div>
-                  <div className="divide-y divide-stone-100">
-                    {filteredLedgerBills.map(b => {
-                      const bId = getTxnId(b);
-                      const bName = getTxnName(b);
-                      const bAmt = getTxnAmount(b);
-                      const bDate = formatDDMM(getTxnDate(b));
-
-                      return (
-                        <div key={bId} className="py-2 px-1 flex justify-between items-center text-xs">
-                          <div>
-                            <div className="font-extrabold uppercase text-stone-900">{formatCustomerNameJI(bName)}</div>
-                            <div className="text-[10px] font-mono text-stone-400 mt-0.5">
-                              #{bId} • {bDate}
-                            </div>
+                {/* Filtered Bills List */}
+                <div className="flex-grow overflow-y-auto custom-scroll space-y-1.5 pr-0.5">
+                  {filteredLedgerBills.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-stone-400 text-center p-6 border-2 border-dashed rounded-2xl">
+                      <i className="fa-solid fa-filter text-3xl mb-2 opacity-50"></i>
+                      <p className="text-xs font-bold uppercase">No records found for filter</p>
+                    </div>
+                  ) : (
+                    filteredLedgerBills.map(bill => (
+                      <div key={getTxnId(bill)} className="bg-white border rounded-xl p-2 flex justify-between items-center shadow-xs">
+                        <div>
+                          <div className="font-black text-xs uppercase text-stone-900">
+                            {formatCustomerNameJI(getTxnName(bill))}
                           </div>
-                          <div className="text-right">
-                            <div className="font-mono font-black text-stone-900">₹{Math.round(bAmt)}</div>
-                            <button type="button" onClick={() => handleLogsItemPrint(b)} className="text-[9px] font-bold text-amber-700 underline">
-                              Print Slip
-                            </button>
+                          <div className="text-[10px] text-stone-500 font-mono">
+                            {formatDDMM(getTxnDate(bill))} • #{getTxnId(bill)}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-black text-xs text-stone-900">₹{Math.round(getTxnAmount(bill))}</span>
+                          <button type="button" onClick={() => handleLogsItemPrint(bill)} className="p-1.5 bg-stone-100 hover:bg-stone-200 rounded-lg text-[10px] active:scale-95">
+                            <i className="fa-solid fa-print"></i>
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-
               </div>
             )}
 
-            {currentTab === "settings" && (
-              <div className="flex-grow p-1 bg-stone-50 overflow-y-auto custom-scroll space-y-2 text-xs">
-                
-                <div className="bg-white p-3 border rounded-xl space-y-2 shadow-xs">
-                  <span className="font-black text-xs uppercase text-stone-900">Receipt Print Settings</span>
-                  
-                  <div className="space-y-1 pt-1">
-                    <label className="text-[10px] font-black text-stone-500 uppercase">Thermal Print Font Size (px):</label>
-                    <input 
-                      type="number" 
-                      value={printSettings.fontSize} 
-                      onChange={e => setPrintSettings({ ...printSettings, fontSize: e.target.value })} 
-                      className="w-full p-2 border rounded-lg font-bold bg-stone-50"
-                    />
+            {/* PRODUCT CATALOG TAB */}
+            {currentTab === "catalog" && (
+              <div className="flex-grow flex flex-col gap-2 overflow-hidden min-h-0">
+                <div className="bg-white p-2.5 border rounded-xl shadow-xs space-y-2 flex-shrink-0">
+                  <div className="flex justify-between items-center">
+                    <h2 className="font-black text-xs uppercase tracking-wider text-stone-800 flex items-center gap-1.5">
+                      <i className="fa-solid fa-boxes-stacked text-amber-500"></i> Master Products Catalog
+                    </h2>
+                    <button type="button" onClick={() => setShowMergeModal(true)} className="text-[10px] bg-amber-500 hover:bg-amber-600 text-stone-950 font-black px-2.5 py-1 rounded-lg uppercase active:scale-95">
+                      <i className="fa-solid fa-code-merge"></i> Merge Item
+                    </button>
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-stone-500 uppercase">Footer Custom Message:</label>
-                    <textarea 
-                      rows="2"
-                      value={printSettings.footerMessage} 
-                      onChange={e => setPrintSettings({ ...printSettings, footerMessage: e.target.value })} 
-                      className="w-full p-2 border rounded-lg font-bold bg-stone-50"
-                    ></textarea>
-                  </div>
-
-                  <div className="pt-2 border-t space-y-1">
-                    <label className="text-[10px] font-black text-stone-500 uppercase">Primary Google Script URL:</label>
+                  {/* Add Product Form */}
+                  <form onSubmit={handleProductAddSubmit} className="flex gap-1.5">
                     <input 
                       type="text" 
-                      value={printSettings.primarySheetUrl} 
-                      onChange={e => setPrintSettings({ ...printSettings, primarySheetUrl: e.target.value })} 
-                      className="w-full p-2 border rounded-lg font-mono text-[10px] bg-stone-50"
+                      placeholder="Add New Product Name..."
+                      value={newProdName}
+                      onChange={e => setNewProdNameState(e.target.value)}
+                      className="flex-1 p-2 text-xs border rounded-lg font-bold bg-stone-50"
                     />
-                  </div>
+                    <button type="submit" className="px-3 bg-stone-900 text-white font-black text-xs rounded-lg uppercase active:scale-95">
+                      Add
+                    </button>
+                  </form>
 
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-stone-500 uppercase">Last Balance Script URL:</label>
-                    <input 
-                      type="text" 
-                      value={printSettings.lastBalanceSheetUrl} 
-                      onChange={e => setPrintSettings({ ...printSettings, lastBalanceSheetUrl: e.target.value })} 
-                      className="w-full p-2 border rounded-lg font-mono text-[10px] bg-stone-50"
-                    />
+                  {/* Sorting controls */}
+                  <div className="flex justify-between items-center pt-1 border-t text-[10px]">
+                    <span className="font-bold text-stone-500 uppercase">Total Items: {sortedProductsList.length}</span>
+                    <div className="flex gap-1">
+                      <button type="button" onClick={() => setProductSortMode("qty")} className={`px-2 py-0.5 rounded font-black uppercase ${productSortMode === 'qty' ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600'}`}>Most Sold</button>
+                      <button type="button" onClick={() => setProductSortMode("alpha")} className={`px-2 py-0.5 rounded font-black uppercase ${productSortMode === 'alpha' ? 'bg-stone-900 text-white' : 'bg-stone-100 text-stone-600'}`}>A-Z</button>
+                    </div>
                   </div>
                 </div>
 
+                {/* Products List */}
+                <div className="flex-grow overflow-y-auto custom-scroll space-y-1.5 pr-0.5">
+                  {sortedProductsList.map((p, idx) => {
+                    const stats = productSalesStats[getNormalizedKey(p.name)] || { qty: 0, amount: 0 };
+                    return (
+                      <div key={p.id || idx} className="bg-white border rounded-xl p-2 flex justify-between items-center shadow-xs">
+                        <div>
+                          <div className="font-black text-xs uppercase text-stone-900">{p.name}</div>
+                          <div className="text-[10px] text-stone-500 font-mono">
+                            Sold Qty: {stats.qty} • Sales: ₹{Math.round(stats.amount)}
+                          </div>
+                        </div>
+                        <button type="button" onClick={() => handleCatalogDelete(p.name)} className="p-1.5 text-rose-500 hover:text-rose-700 active:scale-95">
+                          <i className="fa-solid fa-trash-can"></i>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* SETTINGS TAB */}
+            {currentTab === "settings" && (
+              <div className="flex-grow overflow-y-auto custom-scroll space-y-3 p-1">
+                <div className="bg-white p-3 border rounded-xl shadow-xs space-y-3">
+                  <h2 className="font-black text-xs uppercase tracking-wider text-stone-800 border-b pb-1.5 flex items-center gap-1.5">
+                    <i className="fa-solid fa-sliders text-amber-500"></i> Thermal Receipt Formatting
+                  </h2>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <label className="text-[10px] font-black text-stone-500 uppercase">Font Size (px)</label>
+                      <input type="number" value={printSettings.fontSize} onChange={e => setPrintSettings(p => ({ ...p, fontSize: e.target.value }))} className="w-full p-1.5 border rounded-lg font-mono font-bold bg-stone-50" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-stone-500 uppercase">Font Family</label>
+                      <select value={printSettings.fontFamily} onChange={e => setPrintSettings(p => ({ ...p, fontFamily: e.target.value }))} className="w-full p-1.5 border rounded-lg font-bold bg-stone-50">
+                        <option value="Courier Prime">Courier Prime</option>
+                        <option value="Roboto Mono">Roboto Mono</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-stone-500 uppercase">Row Padding (px)</label>
+                      <input type="number" value={printSettings.rowSpacing} onChange={e => setPrintSettings(p => ({ ...p, rowSpacing: e.target.value }))} className="w-full p-1.5 border rounded-lg font-mono font-bold bg-stone-50" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-stone-500 uppercase">Col Padding (px)</label>
+                      <input type="number" value={printSettings.colSpacing} onChange={e => setPrintSettings(p => ({ ...p, colSpacing: e.target.value }))} className="w-full p-1.5 border rounded-lg font-mono font-bold bg-stone-50" />
+                    </div>
+                  </div>
+
+                  {/* Print Toggles */}
+                  <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t">
+                    {[
+                      ['showName', 'Show Cust Name'],
+                      ['showCity', 'Show City Code'],
+                      ['showDate', 'Show Date'],
+                      ['showTime', 'Show Time'],
+                      ['showSNo', 'Show S.No Column'],
+                      ['showSlimCheckbox', 'Show Slim Checkbox ☐'],
+                      ['enableInlineAutocomplete', 'Inline Fast Autocomplete']
+                    ].map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-1.5 font-bold text-stone-800 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={!!printSettings[key]} 
+                          onChange={e => setPrintSettings(p => ({ ...p, [key]: e.target.checked }))}
+                          className="rounded text-amber-600 focus:ring-0"
+                        />
+                        <span className="text-[11px]">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+
+                  {/* Footer message */}
+                  <div>
+                    <label className="text-[10px] font-black text-stone-500 uppercase">Footer Message</label>
+                    <textarea 
+                      rows="2" 
+                      value={printSettings.footerMessage} 
+                      onChange={e => setPrintSettings(p => ({ ...p, footerMessage: e.target.value }))}
+                      className="w-full p-2 border rounded-lg text-xs font-mono font-bold bg-stone-50"
+                    ></textarea>
+                  </div>
+                </div>
+
+                <div className="bg-white p-3 border rounded-xl shadow-xs space-y-2">
+                  <h2 className="font-black text-xs uppercase tracking-wider text-stone-800 border-b pb-1.5 flex items-center gap-1.5">
+                    <i className="fa-solid fa-link text-amber-500"></i> Google Sheets Endpoints
+                  </h2>
+                  <div>
+                    <label className="text-[10px] font-black text-stone-500 uppercase">Primary Script URL</label>
+                    <input type="text" value={printSettings.primarySheetUrl} onChange={e => setPrintSettings(p => ({ ...p, primarySheetUrl: e.target.value }))} className="w-full p-1.5 border rounded-lg text-[10px] font-mono bg-stone-50" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-stone-500 uppercase">Last Balance Script URL</label>
+                    <input type="text" value={printSettings.lastBalanceSheetUrl} onChange={e => setPrintSettings(p => ({ ...p, lastBalanceSheetUrl: e.target.value }))} className="w-full p-1.5 border rounded-lg text-[10px] font-mono bg-stone-50" />
+                  </div>
+                </div>
+
+                <div className="bg-white p-3 border rounded-xl shadow-xs space-y-2 text-center">
+                  <button type="button" onClick={connectBluetoothPrinter} className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase rounded-xl shadow-sm active:scale-95 flex items-center justify-center gap-2">
+                    <i className="fa-brands fa-bluetooth"></i> {bleStatus.includes('Connected') ? 'Re-Connect Bluetooth Printer' : 'Pair Bluetooth Printer'}
+                  </button>
+                </div>
               </div>
             )}
 
           </main>
 
-          {/* Bottom Navigation Tab Bar */}
-          <nav className="bg-white border-t border-stone-200 no-print w-full max-w-md mx-auto flex-shrink-0 z-40 shadow-lg">
-            <div className="grid grid-cols-5 h-12 text-[10px] font-black uppercase text-stone-500">
+          {/* BOTTOM NAVIGATION BAR */}
+          <nav className="bg-stone-900 text-stone-400 border-t border-stone-800 no-print flex-shrink-0 z-40 max-w-md w-full mx-auto">
+            <div className="flex justify-around items-center h-14">
               <button 
                 type="button" 
-                onClick={() => { triggerHaptic(20); setCurrentTab("bill"); }} 
-                className={`flex flex-col items-center justify-center gap-0.5 ${currentTab === 'bill' ? 'text-stone-950 font-black border-t-2 border-stone-900 bg-stone-50' : 'hover:text-stone-800'}`}
+                onClick={() => { triggerHaptic(15); setCurrentTab("bill"); }}
+                className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 ${currentTab === "bill" ? "text-amber-400 font-black" : "font-bold text-stone-400 hover:text-stone-200"}`}
               >
-                <i className="fa-solid fa-receipt text-sm"></i>
-                <span>Bill</span>
+                <i className="fa-solid fa-file-invoice text-base"></i>
+                <span className="text-[9px] uppercase tracking-wider">Draft</span>
               </button>
 
               <button 
                 type="button" 
-                onClick={() => { triggerHaptic(20); setCurrentTab("products"); }} 
-                className={`flex flex-col items-center justify-center gap-0.5 ${currentTab === 'products' ? 'text-stone-950 font-black border-t-2 border-stone-900 bg-stone-50' : 'hover:text-stone-800'}`}
+                onClick={() => { triggerHaptic(15); setCurrentTab("history"); }}
+                className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 ${currentTab === "history" ? "text-amber-400 font-black" : "font-bold text-stone-400 hover:text-stone-200"}`}
               >
-                <i className="fa-solid fa-boxes-stacked text-sm"></i>
-                <span>Products</span>
+                <i className="fa-solid fa-clock-rotate-left text-base"></i>
+                <span className="text-[9px] uppercase tracking-wider">Recent 10</span>
               </button>
 
               <button 
                 type="button" 
-                onClick={() => { triggerHaptic(20); setCurrentTab("historic"); }} 
-                className={`flex flex-col items-center justify-center gap-0.5 ${currentTab === 'historic' ? 'text-stone-950 font-black border-t-2 border-stone-900 bg-stone-50' : 'hover:text-stone-800'}`}
+                onClick={() => { triggerHaptic(15); setCurrentTab("ledger"); }}
+                className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 ${currentTab === "ledger" ? "text-amber-400 font-black" : "font-bold text-stone-400 hover:text-stone-200"}`}
               >
-                <i className="fa-solid fa-clock-rotate-left text-sm"></i>
-                <span>Historic</span>
+                <i className="fa-solid fa-chart-line text-base"></i>
+                <span className="text-[9px] uppercase tracking-wider">Ledger</span>
               </button>
 
               <button 
                 type="button" 
-                onClick={() => { triggerHaptic(20); setCurrentTab("ledger"); }} 
-                className={`flex flex-col items-center justify-center gap-0.5 ${currentTab === 'ledger' ? 'text-stone-950 font-black border-t-2 border-stone-900 bg-stone-50' : 'hover:text-stone-800'}`}
+                onClick={() => { triggerHaptic(15); setCurrentTab("catalog"); }}
+                className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 ${currentTab === "catalog" ? "text-amber-400 font-black" : "font-bold text-stone-400 hover:text-stone-200"}`}
               >
-                <i className="fa-solid fa-book-journal-whills text-sm"></i>
-                <span>Ledger</span>
+                <i className="fa-solid fa-boxes-stacked text-base"></i>
+                <span className="text-[9px] uppercase tracking-wider">Catalog</span>
               </button>
 
               <button 
                 type="button" 
-                onClick={() => { triggerHaptic(20); setCurrentTab("settings"); }} 
-                className={`flex flex-col items-center justify-center gap-0.5 ${currentTab === 'settings' ? 'text-stone-950 font-black border-t-2 border-stone-900 bg-stone-50' : 'hover:text-stone-800'}`}
+                onClick={() => { triggerHaptic(15); setCurrentTab("settings"); }}
+                className={`flex-1 flex flex-col items-center justify-center h-full gap-0.5 ${currentTab === "settings" ? "text-amber-400 font-black" : "font-bold text-stone-400 hover:text-stone-200"}`}
               >
-                <i className="fa-solid fa-sliders text-sm"></i>
-                <span>Settings</span>
+                <i className="fa-solid fa-sliders text-base"></i>
+                <span className="text-[9px] uppercase tracking-wider">Settings</span>
               </button>
             </div>
           </nav>
@@ -2642,9 +2636,7 @@
       );
     }
 
-    const container = document.getElementById('root');
-    const root = ReactDOM.createRoot(container);
-    root.render(<App />);
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
 </body>
 </html>
